@@ -979,9 +979,13 @@ def handler_for(application):
                 if path.path == "/api/room-management":
                     return self.reply(application.room_management.listing())
                 if path.path == "/api/state":
+                    try:
+                        version = (APP / "VERSION.txt").read_text(encoding="utf-8-sig").strip()
+                    except (OSError, UnicodeError):
+                        version = ""
                     settings=application.store.settings()
                     application.semantic.settings()
-                    return self.reply({"token": application.token, "pid": os.getpid(), "rooms": application.store.rooms(),
+                    return self.reply({"token": application.token, "pid": os.getpid(), "version": version, "rooms": application.store.rooms(),
                         "character_bootstrap":application.store.character_bootstrap,
                         "initial_settings_enabled":application.room_management.initial_settings_enabled,
                         "debug_mode":application.diagnostics.debug_trace.enabled,

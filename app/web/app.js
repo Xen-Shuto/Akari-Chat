@@ -466,6 +466,7 @@ window.ensureFirstMessage=ensureFirstMessage;
 async function loadState(preferred) {
   const initial=!state;
   state = await api("/api/state");
+  $("app-version").textContent=state.version||"";
   document.body.dataset.debugMode=state.debug_mode===true?'true':'false';
   window.AkariRooms?.setInitialSettings(state.initial_settings_enabled);
   const embedding = await api("/api/embedding-settings");
