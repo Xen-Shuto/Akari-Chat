@@ -354,7 +354,7 @@ class Store:
 
     def settings(self):
         defaults = {"executable": "", "model": "", "mmproj": "", "context": 8192,
-                    "gpu_layers": 99, "temperature": 0.7, "top_p": 0.95, "max_tokens": 1024,
+                    "gpu_layers": 99, "temperature": 0.7, "top_p": 0.95, "max_tokens": 0,
                     "history_limit": 40, "thinking_mode":"auto", "tool_calling": True, "extra_args": [], "mtp":"", "mtp_mode":"off",
                     "auto_aux":True, "draft_tokens":2, "auto_start":True}
         install = self.root.parent.parent
@@ -364,13 +364,22 @@ class Store:
                 defaults["executable"] = relative
                 break
         with self.lock:
-            settings,self.settings_warning=settings_io.load(self.root/'settings.json',defaults,validate_settings)
+            path=self.root/'settings.json'
+            settings,self.settings_warning=settings_io.load(path,defaults,validate_settings)
+            if not self.settings_warning and settings['max_tokens']==1024 and not settings.get('generation_limit_migrated'):
+                migrated=dict(settings,max_tokens=0,generation_limit_migrated=True)
+                try:
+                    settings_io.save(path,migrated)
+                except OSError:
+                    self.settings_warning='最大生成tokensの移行を保存できませんでした。設定ファイルの書き込み権限を確認してください。'
+                else:
+                    settings=migrated
             return settings
 
     def save_settings(self, settings):
         with self.lock:
             settings=settings_io.portable(settings,self.root.parent.parent,('executable','model','mmproj','mtp'))
-            settings_io.save(self.root/'settings.json',settings)
+            settings_io.save(self.root/'settings.json',dict(settings,generation_limit_migrated=True))
             self.settings_warning=''
 
     def export_log(self, room):
