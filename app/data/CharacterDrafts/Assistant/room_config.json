@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "room_name": "Assistant",
+  "agent_display_name": "アシスタント",
+  "description": "落ち着いて親切に支援する、標準AIアシスタント兼オペレーター。",
+  "override_settings": {
+    "send_core_memory": true,
+    "send_notepad": true,
+    "enable_auto_retrieval": true,
+    "include_knowledge_in_auto_retrieval": true,
+    "enable_self_awareness": true
+  }
+}

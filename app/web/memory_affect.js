@@ -1,0 +1,11 @@
+"use strict";
+let affectConfig=null,affectRoom=null,affectBaseline='';
+const AF=id=>document.getElementById('affect-'+id),affectKeys=['user_inference','arousal_search','arousal_protection'];
+function affectInput(k){return AF(k.replaceAll('_','-'));}
+function affectForm(){return Object.fromEntries(affectKeys.map(k=>[k,affectInput(k).checked]));}
+function affectDirty(){return !!affectConfig&&JSON.stringify(affectForm())!==affectBaseline;}
+function affectReset(id){if(affectRoom===id)return;affectRoom=id;affectConfig=null;affectBaseline='';for(const k of affectKeys)affectInput(k).checked=false;AF('events').textContent='';AF('status').textContent='設定を読み込んでください。';}
+function affectControls(){const lock=busy||editorBusy||slotsBusy||lifecycleBusy;for(const k of affectKeys)affectInput(k).disabled=lock||!affectConfig;AF('save').disabled=lock||!affectDirty();AF('reload').disabled=lock||!room;}
+async function affectLoad(){if(!room||busy)return;const id=room.id;busy=true;controls();try{const data=await api('/api/memory-affect?room='+encodeURIComponent(id));if(room?.id!==id)return;affectRoom=id;affectConfig=data.settings;for(const k of affectKeys)affectInput(k).checked=affectConfig[k];affectBaseline=JSON.stringify(affectForm());AF('events').textContent=data.events.map(e=>new Date(e.created*1000).toLocaleString()+' / 発言 #'+e.user_id+' → #'+e.assistant_id+' / '+(e.source_current?'出典と一致':'出典変更・除外あり')+' / ユーザー感情: '+(e.user_estimate?'モデル推定 '+e.user_estimate.category+' ('+e.user_estimate.intensity+') 引用「'+e.user_estimate.evidence+'」':'推定なし')+' / キャラクターのArousal: '+(e.arousal??'未観測')).join('\n')||'感情連携の記録はありません。';AF('status').textContent='保存済み設定を読み込みました。直近20件を表示します。';}catch(e){report(e);}finally{busy=false;controls();}}
+for(const k of affectKeys)affectInput(k).addEventListener('change',()=>controls());AF('reload').addEventListener('click',affectLoad);
+AF('save').addEventListener('click',async()=>{if(!affectConfig||busy)return;const id=room.id;busy=true;controls();try{affectConfig=await api('/api/memory-affect-save',{room:id,settings:affectForm(),revision:affectConfig.revision,request_id:crypto.randomUUID()});affectBaseline=JSON.stringify(affectForm());AF('status').textContent='感情連携の設定を保存しました。次の通常会話から適用します。';}catch(e){report(e);}finally{busy=false;controls();}});

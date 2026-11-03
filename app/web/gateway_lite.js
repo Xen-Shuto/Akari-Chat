@@ -1,0 +1,10 @@
+(()=>{const $=id=>document.getElementById(id);let pending=null,active=null,running=false,epoch=0;
+async function api(path,data){const response=await fetch(path,{method:data?'POST':'GET',headers:{Authorization:'Bearer '+$('token').value,...(data?{'Content-Type':'application/json'}:{})},...(data?{body:JSON.stringify(data)}:{})});const result=await response.json();if(!response.ok)throw Error(result.error||'接続失敗');return result;}
+const path=(room,action)=>'/api/v1/rooms/'+encodeURIComponent(room)+'/'+action;
+async function history(room){const result=await api(path(room,'history'));$('log').textContent=result.messages.map(m=>(m.role==='user'?'あなた':'AI')+'：'+m.content).join('\n\n');}
+async function run(fn){try{await fn();}catch(e){$('status').textContent=e.message;}}
+$('connect').onclick=()=>run(async()=>{if(running)throw Error('生成の完了を待ってください。');const r=await api('/api/v1/rooms');$('rooms').replaceChildren(...r.rooms.map(id=>new Option(id,id)));$('status').textContent='接続しました。';});
+$('history').onclick=()=>run(()=>history($('rooms').value));
+$('send').onclick=()=>run(async()=>{if(running)return;const room=$('rooms').value,message=$('message').value;if(!room||!message.trim())return;const signature=JSON.stringify([room,message]);if(!pending||pending.signature!==signature)pending={signature,id:crypto.randomUUID()};running=true;$('send').disabled=true;const serial=++epoch;try{active={room,id:pending.id};let r=await api(path(room,'chat'),{request_id:pending.id,message});while(['queued','running'].includes(r.status)){ $('status').textContent='生成中…';await new Promise(resolve=>setTimeout(resolve,800));if(serial!==epoch)return;r=await api(path(room,'requests')+'?request_id='+encodeURIComponent(pending.id));} $('status').textContent='状態：'+r.status;await history(room);if(['complete','cancelled'].includes(r.status)){pending=null;$('message').value='';}}finally{active=null;running=false;$('send').disabled=false;}});
+$('cancel').onclick=()=>run(async()=>{if(active)await api(path(active.room,'cancel'),{request_id:active.id});});
+})();

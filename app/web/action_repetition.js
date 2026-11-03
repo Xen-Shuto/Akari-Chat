@@ -1,0 +1,9 @@
+"use strict";
+let repetitionConfig=null,repetitionRoom=null,repetitionBaseline='';const RP=id=>document.getElementById('repetition-'+id);
+function repetitionForm(){return {semantic_reports:RP('semantic-reports').checked,tool_results:RP('tool-results').checked};}
+function repetitionDirty(){return !!repetitionConfig&&JSON.stringify(repetitionForm())!==repetitionBaseline;}
+function repetitionReset(id){if(id===repetitionRoom)return;repetitionRoom=id;repetitionConfig=null;repetitionBaseline='';RP('semantic-reports').checked=false;RP('tool-results').checked=false;RP('status').textContent='設定を読み込んでください。';}
+function repetitionControls(){const lock=busy||editorBusy||slotsBusy||lifecycleBusy;for(const key of ['semantic-reports','tool-results'])RP(key).disabled=lock||!repetitionConfig;RP('save').disabled=lock||!repetitionDirty();RP('reload').disabled=lock||!room;}
+async function repetitionLoad(){if(!room||busy)return;const id=room.id;busy=true;controls();try{const data=await api('/api/action-repetition?room='+encodeURIComponent(id));if(room?.id!==id)return;repetitionRoom=id;repetitionConfig=data;RP('semantic-reports').checked=data.semantic_reports;RP('tool-results').checked=data.tool_results;repetitionBaseline=JSON.stringify(repetitionForm());RP('status').textContent='設定を読み込みました。判定結果は「状態・履歴を更新」で確認できます。';}catch(e){report(e);}finally{busy=false;controls();}}
+RP('reload').addEventListener('click',repetitionLoad);
+for(const key of ['semantic-reports','tool-results'])RP(key).addEventListener('change',()=>controls());RP('save').addEventListener('click',async()=>{if(!repetitionConfig||busy)return;busy=true;controls();try{repetitionConfig=await api('/api/action-repetition-save',{room:room.id,settings:repetitionForm(),revision:repetitionConfig.revision,request_id:crypto.randomUUID()});repetitionBaseline=JSON.stringify(repetitionForm());RP('status').textContent='反復評価の設定を保存しました。';}catch(e){report(e);}finally{busy=false;controls();}});

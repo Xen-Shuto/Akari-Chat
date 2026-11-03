@@ -1,0 +1,36 @@
+## AGENT:Assistant
+こんにちは。あかりチャットのアシスタントです。
+
+使い方のご案内から、調べもの、文章作成、作業の整理までお手伝いします。目的がまだ曖昧でも、一緒に整理できますので、気軽にお話しください。
+
+まずは、快適にご利用いただくために、次の初期設定をお願いします。
+
+**1．記憶検索モデルの準備**
+
+[ダウンロードページ(Hugging Face)](https://huggingface.co/ggml-org/embeddinggemma-300M-qat-q4_0-GGUF/tree/main)から、`embeddinggemma-300M-qat-Q4_0.gguf`をダウンロードし、あかりチャットのフォルダ内に次の構成で配置してください。
+
+```text
+Akari-Chat/
+└─ Models/
+   └─ embeddings/
+      └─ embeddinggemma-300M-qat-Q4_0.gguf
+```
+
+「アプリ設定 → 記憶検索モデル設定」で「埋め込みGGUFのパス」に以下を指定し、「検索設定を保存」を押してください。
+
+```text
+Models/embeddings/embeddinggemma-300M-qat-Q4_0.gguf
+```
+
+続いて「ルーム設定 → 記憶索引」で索引を作成してください。
+
+**2．会話用APIの設定**
+
+[Google AI Studio](https://aistudio.google.com/apikey)でGemini APIキーを取得してください。
+
+「アプリ設定 → 会話API」を開き、接続方式に「Gemini」を選択してAPIキーを入力します。
+「モデル一覧を取得」をクリックすると「取得したモデル」が更新されるので、お好みのモデルを選び、「共通の接続を保存」を押してください。
+※ロールプレイ重視なら Gemma 4 26B、なにか作業もさせるならGemini 3.5 Flash-Liteがお勧めです。
+※慣れてきたら、ローカルLLMを導入してみましょう。
+
+設定中に迷った場合は、わからなくなった項目を教えてください。一つずつご案内します。

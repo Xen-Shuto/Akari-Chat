@@ -1,0 +1,13 @@
+"use strict";
+(()=>{
+ let doc=null,selected=null,loading=false,request=0;
+ function dirty(){return !!doc&&doc.settings.enabled!==$("index-refresh-enabled").checked;}
+ function controls(){const blocked=busy||loading||lifecycleBusy||!room;for(const id of ['enabled','save'])$("index-refresh-"+id).disabled=blocked||selected!==room?.id||!doc;$("index-refresh-load").disabled=blocked;$("index-refresh-retry").disabled=blocked||selected!==room?.id||!doc?.settings.enabled||!doc.job||['queued','running'].includes(doc.job.state);}
+ function paint(value){doc=value;$("index-refresh-enabled").checked=doc.settings.enabled;$("index-refresh-status").textContent=doc.warning||((doc.settings.enabled?'自動索引更新はON。':'自動索引更新はOFF。')+(doc.job?' 更新状態: '+doc.job.state+(doc.job.error?' · '+doc.job.error:''):' 保存後の更新記録はありません。'));$("index-refresh-history").textContent=doc.history.map(h=>h.state+(h.error?' · '+h.error:'')+(h.coverage?' · 未索引 '+h.coverage.missing+' / '+h.coverage.documents+'断片':'')).join('\n')||'実行履歴はありません。';controls();}
+ async function load(discard=false){if(!room||loading)return;if(dirty()&&!discard){notice('索引更新設定の編集を保存または破棄してください。');return;}const id=room.id,token=++request;loading=true;controls();try{const value=await api('/api/index-refresh?room='+encodeURIComponent(id));if(room?.id!==id||request!==token)return;selected=id;paint(value);}catch(e){report(e);}finally{if(request===token)loading=false;controls();}}
+ $("index-refresh-load").addEventListener('click',()=>load(true));
+ $("index-refresh-save").addEventListener('click',async()=>{if(!doc||selected!==room?.id||busy||loading)return;loading=true;controls();try{await api('/api/index-refresh',{room:selected,enabled:$("index-refresh-enabled").checked,revision:doc.settings.revision});loading=false;await load(true);}catch(e){report(e);}finally{loading=false;controls();}});
+ $("index-refresh-retry").addEventListener('click',async()=>{if(!doc?.job||selected!==room?.id||loading||busy)return;if(dirty()){notice('設定の編集を保存または破棄してください。');return;}loading=true;controls();try{paint(await api('/api/index-refresh-retry',{room:selected,revision:doc.job.revision}));}catch(e){report(e);}finally{loading=false;controls();}});
+ document.querySelector('[data-panel="room-index-panel"]').addEventListener('panelactivate',()=>load());
+ window.AkariIndexRefresh={dirty,controls,roomChanged:()=>{if(selected===room?.id)return;request++;loading=false;doc=null;selected=null;$("index-refresh-enabled").checked=false;$("index-refresh-status").textContent='設定を読み込んでください。';$("index-refresh-history").textContent='';if(!$("room-index-panel").hidden&&!$("workspace-room-settings").hidden)load();},saved:result=>{$("index-refresh-status").textContent=result.index_warning;notice(result.index_warning,12000);}};
+})();

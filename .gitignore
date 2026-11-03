@@ -1,0 +1,50 @@
+# Python caches and local development environments.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.test-tmp/
+.venv/
+venv/
+.akari.lock
+
+# Private character data.
+/app/characters/
+
+# Models are supplied separately; keep the directory placeholder.
+/Models/*
+!/Models/.gitkeep
+
+# Inference-engine binaries and local build provenance.
+/llama.cpp/runtime-manifest.json
+*.exe
+*.dll
+*.pyd
+*.gguf
+
+# Exported character folders may contain private conversations and memories.
+/Exports/
+
+# Local credentials, databases, and diagnostic logs.
+.env
+.env.*
+*.pem
+*.key
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.log
+
+# CharacterDrafts, Docs, source files, and their media remain trackable.
+
+# Bundled execution dependencies are required after git clone.
+!/app/runtime/**/*.exe
+!/app/runtime/**/*.dll
+!/app/runtime/**/*.pyd
+!/app/runtime/**/certifi/cacert.pem
+
+# Bundle the local inference server; models remain separate.
+!/llama.cpp/*.exe
+!/llama.cpp/*.dll
+# Local installation provenance is not needed to run the app.
+/app/runtime/manifest.json

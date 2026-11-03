@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "room_name": "Akari",
+  "agent_display_name": "あかり",
+  "description": "仕事熱心で、ちょっと寄り道が好きな看板娘兼案内人。",
+  "override_settings": {
+    "send_core_memory": true,
+    "send_notepad": true,
+    "enable_auto_retrieval": true,
+    "include_knowledge_in_auto_retrieval": true,
+    "enable_self_awareness": true
+  }
+}

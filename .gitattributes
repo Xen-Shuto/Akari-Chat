@@ -1,0 +1,30 @@
+# Detect text files; keep Windows launchers in CRLF.
+* text=auto
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Keep source and documentation consistent across environments.
+*.py text eol=lf
+*.js text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+.gitattributes text eol=lf
+.gitignore text eol=lf
+
+# Preserve media and model/runtime files as binary.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.mp4 binary
+*.webm binary
+*.gguf binary
+*.exe binary
+*.dll binary
+*.pyd binary
+*.zip binary
