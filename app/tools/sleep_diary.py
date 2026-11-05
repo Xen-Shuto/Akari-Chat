@@ -25,19 +25,20 @@ class SleepDiary:
             db.execute("UPDATE sleep_diary_batches SET state='unknown' WHERE state='running'")
             db.execute('CREATE TABLE IF NOT EXISTS sleep_diary_cursors(room TEXT PRIMARY KEY,last_id INTEGER NOT NULL)')
 
-    def source(self, room, night, config):
+    def source(self, room, night, config, *, cursor=None, maximum=None, replay=False):
         day = datetime.fromisoformat(night).replace(tzinfo=JST)
         hour, minute = map(int, config['end'].split(':'))
         awake = day.replace(hour=hour, minute=minute)
         if config['end'] > config['start']:awake -= timedelta(days=1)
         with self.store.connect() as db:
             row=db.execute('SELECT last_id FROM sleep_diary_cursors WHERE room=?',(room,)).fetchone()
+            if cursor is not None:row=(cursor,)
             if row is None:
                 # First use starts with this awake period, not an implicit whole-log import.
                 cursor=db.execute("SELECT COALESCE(MAX(id),0) FROM messages WHERE room=? AND julianday(created)<julianday(?)",(room,awake.isoformat())).fetchone()[0]
                 db.execute('INSERT INTO sleep_diary_cursors VALUES(?,?)',(room,cursor))
             else:cursor=row[0]
-            rows=db.execute("SELECT m.id,m.role,m.content,m.created FROM messages m WHERE m.room=? AND m.id>? AND m.status='complete' AND m.deleted=0 AND m.role IN ('user','assistant') AND NOT EXISTS (SELECT 1 FROM resource_drafts d JOIN json_each(d.message_revisions) b WHERE d.room=m.room AND d.kind='diary' AND d.status IN ('pending','approved') AND json_extract(b.value,'$.id')=m.id) ORDER BY m.id LIMIT 81",(room,cursor)).fetchall()
+            rows=db.execute("SELECT m.id,m.role,m.content,m.created FROM messages m WHERE m.room=? AND m.id>? AND m.status='complete' AND m.deleted=0 AND m.role IN ('user','assistant') AND (? OR NOT EXISTS (SELECT 1 FROM resource_drafts d JOIN json_each(d.message_revisions) b WHERE d.room=m.room AND d.kind='diary' AND d.status IN ('pending','approved') AND json_extract(b.value,'$.id')=m.id)) AND (? IS NULL OR m.id<=?) ORDER BY m.id LIMIT 81",(room,cursor,replay,maximum,maximum)).fetchall()
         has_more=len(rows)>80
         rows=[dict(row) for row in rows[:80]]
         # Only completed conversational material: never consume an unanswered user turn.
@@ -66,21 +67,21 @@ class SleepDiary:
         source['hash']=hashlib.sha256(json.dumps(source,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
         return diary,source
 
-    def episode_source(self, room, night):
+    def episode_source(self, room, night, *, replay=False):
         with self.store.connect() as db:
             row=db.execute("SELECT payload FROM sleep_diary_batches WHERE room=? AND night=? AND state='complete'",(room,night)).fetchone()
             if row is None:raise NoDiarySource('この夜の日記資料が未確定のため、エピソードの重複作成を見送りました。')
             source=json.loads(row[0]);covered=set()
             for prior in db.execute("SELECT source FROM episode_drafts WHERE room=? AND status IN ('pending','approved')",(room,)):
                 covered.update(message['id'] for message in json.loads(prior[0]).get('messages',[]))
-        messages=[message for message in source['messages'] if message['id'] not in covered]
+        messages=[message for message in source['messages'] if replay or message['id'] not in covered]
         if {m['role'] for m in messages}!={'user','assistant'}:raise NoDiarySource('エピソード化する未整理の会話はありません。既存の案と記憶を保持しました。')
         ids={message['id'] for message in messages}
         bindings=[binding for binding in source['message_revisions'] if binding['id'] in ids]
         self.app.resources.check_messages(room,json.dumps(bindings))
         return dict(messages=messages,message_revisions=bindings)
 
-    def generate(self, item, config, before_start):
+    def generate(self, item, config, before_start, *, source_override=None):
         app=self.app;room=item['room'];key=item['id']
         with app.lock,self.store.lock:
             if app.closing or app.job or app.conversation_waiters or not text_connection.ready(app,room):
@@ -91,7 +92,7 @@ class SleepDiary:
                 if prior:
                     if prior['state']=='complete':return dict(db.execute('SELECT * FROM resource_drafts WHERE id=?',(prior['draft_id'],)).fetchone())
                     raise ValueError('前回の日記生成の結果を確認してください。自動再送しません。')
-            diary,source=self.source(room,item['night'],config)
+            diary,source=source_override if source_override is not None else self.source(room,item['night'],config)
             expected=text_connection.snapshot(app,room)
             before_start()
             generation=Generation(thinking_mode=self.store.settings().get('thinking_mode','auto'))
@@ -122,7 +123,7 @@ class SleepDiary:
             body=''.join(chunks).strip()
             if not body:raise ValueError('日記の生成結果が空です。')
             marker='<!-- akari-sleep-diary:'+item['night']+':'+source['hash']+' -->'
-            text=diary['text']+('\n\n' if diary['text'] else '')+'## 睡眠時の振返り（'+source['awake_start'][:10]+'～'+item['night']+'）\n'+marker+'\n'+body+'\n'
+            text=diary['text']+('\n\n' if diary['text'] else '')+'## 睡眠時の振返り（'+source['awake_start'][:10]+'～'+item['night'][:10]+'）\n'+marker+'\n'+body+'\n'
             app.resources.validate('diary',text)
             with app.lock,self.store.lock,self.store.connect() as db:
                 if app.closing or generation.cancelled.is_set():raise DiaryCancelled('日記生成を中止しました。')
@@ -133,7 +134,8 @@ class SleepDiary:
                 if current_persona!=source['persona']:raise EditConflict('生成中に人格設定が変更されました。原本は保持しました。')
                 draft=db.execute("INSERT INTO resource_drafts(room,kind,name,revision,source_hash,text,dependencies,message_revisions) VALUES(?,'diary','',?,'',?,?,?)",(room,diary['revision'],text,json.dumps(source['dependencies']),json.dumps(source['message_revisions']))).lastrowid
                 db.execute("UPDATE sleep_diary_batches SET state='complete',draft_id=? WHERE job_id=?",(draft,key))
-                db.execute('UPDATE sleep_diary_cursors SET last_id=MAX(last_id,?) WHERE room=?',(source['last_id'],room))
+                if source_override is None:
+                    db.execute('UPDATE sleep_diary_cursors SET last_id=MAX(last_id,?) WHERE room=?',(source['last_id'],room))
             return dict(id=draft,room=room,kind='diary',name='',text=text,status='pending')
         except Exception:
             with self.store.connect() as db:db.execute("UPDATE sleep_diary_batches SET state=? WHERE job_id=? AND state='running'",('cancelled' if generation.cancelled.is_set() else 'failed',key))

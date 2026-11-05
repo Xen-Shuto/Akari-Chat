@@ -625,18 +625,18 @@ function bindHold(button,action){
   window.addEventListener("blur",reset);
   document.addEventListener("visibilitychange",()=>{if(document.hidden)reset();});
 }
-async function finishApplication(restarting){
+async function finishApplication(restarting,updateRevision=null){
   if(lifecycleBusy)return;
   lifecycleBusy=true;controls();
   const oldToken=state.token;
   $("engine-state").textContent="Stopping";
-  notice(restarting?"生成と推論サーバーを停止して再起動しています…":"アプリを終了しています…",15000);
+  notice(updateRevision?"更新を適用して再起動しています…":restarting?"生成と推論サーバーを停止して再起動しています…":"アプリを終了しています…",15000);
   try{
-    await api(restarting?"/api/restart":"/api/shutdown",{});
+    await api(updateRevision?"/api/update/apply":restarting?"/api/restart":"/api/shutdown",updateRevision?{revision:updateRevision}:{});
     ready=false;localReady=false;busy=false;generating=false;clearInterval(poll);controls();
     $("engine-state").textContent=restarting?"Starting":"Inactive";
     if(!restarting){notice("アプリと管理中の推論サーバーを終了しました。このタブを閉じてください。",15000);return;}
-    const deadline=Date.now()+60000;
+    const deadline=Date.now()+(updateRevision?300000:60000);
     while(Date.now()<deadline){
       const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),1500);
       try{
@@ -968,7 +968,8 @@ $("editor-backups").addEventListener("change",async()=>{
   try{const backup=await api("/api/document-backup?room="+encodeURIComponent(doc.room)+"&key="+doc.key+"&id="+encodeURIComponent(id));if(editorDocument!==doc||$("editor-backups").value!==id)return;editorBackup=backup;$("editor-backup-preview").textContent=backup.exists?backup.text:"更新前はファイルがありませんでした。";editorControls();}catch(error){report(error);}
 });
 $("editor-backup-load").addEventListener("click",()=>{if(!editorBackup||!editorDocument||editorBackup.path!==editorDocument.path)return;$("editor-text").value=editorBackup.text;$("editor-status").textContent="バックアップの本文を編集欄に読み込みました。確認して保存してください。";editorControls();});
-window.addEventListener("beforeunload",event=>{if(lifecycleBusy)return;if(appearanceDraftDirty()||itemDraftDirty()||avatarDirty()||window.AkariGroups?.dirty()||window.AkariIndexRefresh?.dirty()||window.AkariConversation?.dirty()||editorDirty()||slotsDraftDirty()||resourceDirty()||worldDirty()||lifeDirty()||autonomyDirty()){event.preventDefault();event.returnValue="";}});
+function applicationDraftDirty(){return appearanceDraftDirty()||itemDraftDirty()||avatarDirty()||window.AkariGroups?.dirty()||window.AkariIndexRefresh?.dirty()||window.AkariConversation?.dirty()||editorDirty()||slotsDraftDirty()||resourceDirty()||worldDirty()||lifeDirty()||autonomyDirty();}
+window.addEventListener("beforeunload",event=>{if(lifecycleBusy)return;if(applicationDraftDirty()){event.preventDefault();event.returnValue="";}});
 
 let memoryRouteSource=null,memoryRouteOperation=null,memoryRouteBusy=false;
 function memoryRouteControls(){
@@ -2685,3 +2686,54 @@ $("core-reflect").addEventListener('click',async()=>{
 document.querySelector('[data-open-common-closet]').addEventListener('click',()=>{showWorkspace('shared');revealPanel('shared-closet-panel');});
 document.querySelector('[data-panel="shared-closet-panel"]').addEventListener('panelactivate',()=>lifeLoad().catch(report));
 document.querySelector('[data-open-embedding]').addEventListener('click',()=>{showWorkspace('settings');revealPanel('embedding-details');});
+
+// Public application update controls. Downloading never modifies the running code.
+let updateDocument=null,updatePendingApply=false,updateLoading=false;
+function updateControls(){
+ const running=updateDocument&&['checking','downloading','staging','applying'].includes(updateDocument.state);
+ $('app-update-check').disabled=updateLoading||lifecycleBusy||running;
+ $('app-update-apply').disabled=updateLoading||lifecycleBusy||!updateDocument?.restart_supported||!['available','prepared'].includes(updateDocument?.state);
+}
+function renderUpdate(data){
+ updateDocument=data;
+ const names={idle:'未確認',checking:'確認中',current:'同じバージョンです',available:'異なるバージョンがあります',downloading:'取得中',staging:'取得ファイルを確認中',prepared:'取得完了・適用可能',applying:'適用・再起動中',failed:'更新を完了できませんでした'};
+ $('app-update-status').textContent='現在: '+(data.current||'未設定')+' / 公開: '+(data.remote||'未確認')+' / '+(names[data.state]||data.state)+(data.bytes?' / 取得 '+Math.ceil(data.bytes/1048576)+' MB':'')+(data.error?' / '+data.error:'')+(data.last?' / 前回: '+({complete:'更新完了',failed:'未適用',unknown:'復元結果未確認'}[data.last.state]||data.last.state)+(data.last.error?' '+data.last.error:''):'');
+ updateControls();
+}
+async function loadUpdate(){
+ if(updateLoading||lifecycleBusy)return;
+ updateLoading=true;updateControls();
+ try{
+  renderUpdate(await api('/api/update'));
+  if(updatePendingApply&&updateDocument.state==='failed')updatePendingApply=false;
+  if(updatePendingApply&&updateDocument.state==='prepared'){
+   updatePendingApply=false;
+   if(applicationDraftDirty()){notice('編集内容を保存または破棄してから、更新して再起動してください。');return;}
+   await finishApplication(true,updateDocument.revision);
+  }
+ }catch(error){updatePendingApply=false;report(error);}finally{updateLoading=false;updateControls();}
+}
+$('app-update-check').onclick=async()=>{
+ updateLoading=true;updateControls();
+ try{await api('/api/update/check',{});}catch(error){report(error);}finally{updateLoading=false;}
+ await loadUpdate();
+};
+$('app-update-apply').onclick=async()=>{
+ if(applicationDraftDirty()){notice('未保存の編集を保存または破棄してください。');return;}
+ if(!updateDocument)return;
+ if(updateDocument.state==='prepared'){await finishApplication(true,updateDocument.revision);return;}
+ updateLoading=true;updateControls();
+ try{await api('/api/update/prepare',{revision:updateDocument.revision});updatePendingApply=true;}catch(error){report(error);}finally{updateLoading=false;}
+ await loadUpdate();
+};
+document.querySelector('[data-panel="app-update-panel"]').addEventListener('panelactivate',loadUpdate);
+setInterval(()=>{if(!lifecycleBusy&&(updatePendingApply||!$('workspace-settings').hidden&&!$('app-update-panel').hidden))loadUpdate();},1500);
+
+window.addEventListener('load',async()=>{
+ try{
+  const data=await api('/api/update'),last=data.last;
+  if(!last||sessionStorage.getItem('akari-update-result')===last.id)return;
+  sessionStorage.setItem('akari-update-result',last.id);
+  notice(last.state==='complete'?'アップデートが完了しました: '+last.version:'アップデートは完了していません。共通設定のアップデートとコンソールを確認してください。'+(last.error?' '+last.error:''),15000);
+ }catch{} // A result notification must never block normal startup.
+});

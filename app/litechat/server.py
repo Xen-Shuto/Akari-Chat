@@ -1,5 +1,5 @@
 import argparse
-from contextlib import closing,contextmanager
+from contextlib import closing,contextmanager,nullcontext
 import http.client
 import hashlib
 import sqlite3
@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 from .engine import Engine, Generation, validate_settings
 from . import text_connection
 from .instance import InstanceLock
-from .lifecycle import RESTART_EXIT
+from .lifecycle import RESTART_EXIT, UPDATE_EXIT
 from .storage import Store
 from .model_catalog import model_files, discover, local_model_name, embedding_files
 from .memory_context import build_context
@@ -102,6 +102,8 @@ class Application:
     def __init__(self, app_dir=APP, *, debug=False):
         self.app_dir = Path(app_dir).resolve()
         self.install = self.app_dir.parent
+        from .updater import Updater
+        self.updater=Updater(self.install)
         self.store = Store(self.app_dir / "data")
         self.chat_ops = ChatOps(self.store)
         self.episodes = Episodes(self.store)
@@ -891,6 +893,7 @@ class HTTPServer(ThreadingHTTPServer):
     def __init__(self,*args,**kwargs):
         self.restart_supported=False
         self.restart_requested=False
+        self.update_requested=False
         self.lifecycle_requested=None
         self.lifecycle_lock=threading.Lock()
         super().__init__(*args,**kwargs)
@@ -967,6 +970,8 @@ def handler_for(application):
                     return self.reply(application.watch_extensions.settings(args.get("room",[""])[0]))
                 if path.path=="/api/music-settings":
                     return self.reply(application.music_settings.view())
+                if path.path=='/api/update':
+                    return self.reply(dict(application.updater.status(),restart_supported=self.server.restart_supported))
                 if path.path=="/api/external-gateway-room":
                     return self.reply(application.gateway.access.view(args.get("room",[""])[0]))
                 if path.path=="/api/external-gateway":
@@ -1436,6 +1441,14 @@ def handler_for(application):
                     try:result=application.attachment_disposal.change(data.get('room',''),data.get('id',''),data.get('revision',''),data.get('action',''),data.get('request_id',''),data.get('confirm_permanent',False))
                     except sqlite3.Error as error:raise ValueError('ファイル操作の保存結果を確認できません。退避一覧から実体を確認してください。') from error
                     return self.reply(result)
+                if self.path=='/api/manual-memory':
+                    return self.reply(application.sleep_schedule.manual.start(data.get('room',''),data.get('mode'),data.get('request_id'),data.get('revision')))
+                if self.path=='/api/manual-memory-resume':
+                    return self.reply(application.sleep_schedule.manual.resume(data.get('room',''),data.get('id'),data.get('revision')))
+                if self.path=='/api/manual-memory-cancel':
+                    return self.reply(application.sleep_schedule.manual.cancel(data.get('room',''),data.get('id'),data.get('revision')))
+                if self.path=='/api/manual-memory-ack':
+                    return self.reply(application.sleep_schedule.manual.acknowledge(data.get('room',''),data.get('id'),data.get('revision')))
                 if self.path=='/api/night-autosave-ack':return self.reply(application.sleep_schedule.autosave.acknowledge(data.get('room',''),data.get('id',''),data.get('revision','')))
                 if self.path=='/api/web-search-test':
                     if application.closing:raise ValueError('終了処理中です。')
@@ -1701,14 +1714,24 @@ def handler_for(application):
                 if self.path == "/api/cancel":
                     application.cancel(data.get("id"))
                     return self.reply({"ok": True})
-                if self.path in ("/api/shutdown","/api/restart"):
-                    restarting=self.path=="/api/restart"
+                if self.path=='/api/update/check':return self.reply(application.updater.start('check'))
+                if self.path=='/api/update/prepare':return self.reply(application.updater.start('prepare',data.get('revision')))
+                if self.path in ("/api/shutdown","/api/restart",'/api/update/apply'):
+                    updating=self.path=='/api/update/apply'
+                    restarting=self.path!="/api/shutdown"
                     if restarting and not self.server.restart_supported:
                         raise ValueError("再起動にはStart.batまたはapp.pyから起動してください。")
                     if not self.server.lifecycle_lock.acquire(blocking=False):raise ValueError("終了処理中です。")
                     try:
                         if self.server.lifecycle_requested:raise ValueError("終了処理中です。")
-                        if application.close() is False:raise ValueError("生成・索引処理の終了確認が未完了です。しばらく待って再試行してください。")
+                        with application.updater.lock if updating else nullcontext():
+                            if updating:
+                                candidate=application.updater.status()
+                                if candidate['state']!='prepared' or candidate['revision']!=data.get('revision'):
+                                    raise ValueError('取得済みの更新を再確認してください。')
+                            if application.close() is False:raise ValueError("生成・索引処理の終了確認が未完了です。しばらく待って再試行してください。")
+                            if updating:application.updater.arm(data.get('revision'))
+                        self.server.update_requested=updating
                         self.server.restart_requested=restarting
                         self.server.lifecycle_requested='restart' if restarting else 'shutdown'
                         try:self.reply({"ok": True})
@@ -1803,7 +1826,7 @@ def main(argv=None, app_dir=APP, restart_supported=False):
                     if application:atexit.unregister(application.close)
                     if console_capture:console_capture.close()
                     server.server_close()
-        return RESTART_EXIT if server and server.restart_requested else 0
+        return UPDATE_EXIT if server and server.update_requested else RESTART_EXIT if server and server.restart_requested else 0
     except (OSError, ValueError, sqlite3.Error) as error:
         print("起動できませんでした: " + str(error), flush=True)
         return 1

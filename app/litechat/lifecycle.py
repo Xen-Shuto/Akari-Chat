@@ -6,6 +6,7 @@ from pathlib import Path
 from .process_job import ProcessJob
 
 RESTART_EXIT = 75
+UPDATE_EXIT = 76
 
 
 def supervise(argv=None):
@@ -19,7 +20,15 @@ def supervise(argv=None):
             else:arguments[i+1]=str(port)
             break
     root=Path(__file__).resolve().parents[1]
+    from .update_files import apply_pending
     while True:
+        try:
+            if not apply_pending(root.parent):
+                print('更新の復元結果が未確認です。app/data/updatesの退避先と履歴を確認してください。',flush=True)
+                return 1
+        except (OSError,ValueError) as error:
+            print('更新を安全に適用できませんでした: '+str(error),flush=True)
+            return 1
         owner=ProcessJob();child=None
         try:
             child=subprocess.Popen([sys.executable,'-u',str(root/'app.py'),'--akari-worker',*arguments],cwd=root)
@@ -33,7 +42,7 @@ def supervise(argv=None):
                 except subprocess.TimeoutExpired:child.terminate();child.wait(timeout=5)
                 return 0
         finally:owner.close()
-        if code!=RESTART_EXIT:return code
+        if code not in (RESTART_EXIT,UPDATE_EXIT):return code
         print('アプリを再起動しています。',flush=True)
         arguments=[value for value in arguments if value != '--startup-splash']
         if '--no-browser' not in arguments:arguments.append('--no-browser')

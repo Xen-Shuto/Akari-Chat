@@ -41,7 +41,7 @@ class SleepReview:
             raise ValueError('この対象は編集できません。')
         if kind == 'episode' and {m['role'] for m in strict_json(raw)['conversation']} != {'user','assistant'}:
             raise ValueError('エピソードには完了したユーザーとキャラクターの会話が必要です。')
-        if kind not in ('dream','episode') and not document['text'].strip():
+        if kind not in ('dream','episode') and not document['text'].strip() and conversation is None:
             raise ValueError('整理対象の本文が空です。まず記憶または短期メモを保存してください。')
         return dict(room=room, kind=kind, name=name, revision=document['revision'],
                     source_hash=digest, source=self._material(raw),
@@ -147,7 +147,7 @@ class SleepReview:
                 raise EditConflict('編集できない対象、または作成済みの記憶です。')
             if kind == 'episode' and {m['role'] for m in strict_json(raw)['conversation']} != {'user','assistant'}:
                 raise ValueError('エピソードには完了したユーザーとキャラクターの会話が必要です。')
-            if kind not in ('dream','episode') and not document['text'].strip():
+            if kind not in ('dream','episode') and not document['text'].strip() and conversation is None:
                 raise ValueError('整理対象の本文が空です。')
             self._budget(raw)
             generation = Generation(thinking_mode=self.store.settings().get('thinking_mode','auto'))
@@ -175,6 +175,8 @@ class SleepReview:
             else:
                 prompt += ('targetの重複や冗長さを整理した全文だけを返してください。重要な事実・約束・固有名・未解決事項を残し、'
                            '根拠のない追記や情報の削除を避け、参考資料と矛盾する箇所は未確認として残してください。')
+                if conversation is not None:
+                    prompt += '今回のconversationから重要な約束・好み・未解決事項を反映し、短期メモは次に必要な要点に、永続記憶は継続して必要な情報にまとめてください。'
             settings = self.store.settings()
             payload = dict(model='Local_LLM', stream=True, temperature=0.2,
                            max_tokens=min(settings['max_tokens'] or 4096,4096),

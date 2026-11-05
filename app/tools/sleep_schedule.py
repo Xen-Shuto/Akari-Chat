@@ -52,6 +52,8 @@ class SleepSchedule:
         from .night_autosave import NightAutosave
         self.autosave=NightAutosave(self)
         self.diary=SleepDiary(app)
+        from .manual_memory import ManualMemory
+        self.manual=ManualMemory(self)
 
     def settings(self,room):
         room=self.store.room_path(room).resolve().name
@@ -98,7 +100,7 @@ class SleepSchedule:
         room=self.store.room_path(room).resolve().name
         with self.store.connect() as db:
             rows=[dict(r) for r in db.execute("SELECT n.*,d.status AS draft_status,t.id AS timeline_id,a.state AS auto_save_state,a.error AS auto_save_error,a.revision AS auto_save_revision FROM sleep_night_jobs n LEFT JOIN resource_drafts d ON d.id=n.draft_id LEFT JOIN night_autosaves a ON a.job_id=n.id LEFT JOIN activity_timelines t ON t.room=n.room AND t.id=n.id WHERE n.room=? ORDER BY (n.state='unknown' AND n.reviewed=0) DESC,(n.state IN ('queued','running')) DESC,n.rowid DESC LIMIT 50",(room,))]
-        return dict(settings=self.settings(room),runs=rows)
+        return dict(settings=self.settings(room),runs=rows,manual=self.manual.listing(room))
 
     def _finish(self,key,state,error='',draft_id=None):
         with self.store.lock,self.store.connect() as db:
@@ -129,6 +131,7 @@ class SleepSchedule:
         return self.listing(room)
 
     def tick(self,moment=None):
+        if self.manual.tick():return True
         if self.autosave.process_one(moment or datetime.now(JST)):return True
         explicit=moment is not None
         if not explicit and not self.pending and time.monotonic()<self.next_scan:return False
@@ -141,6 +144,7 @@ class SleepSchedule:
                 with self.store.lock,self.store.connect() as db:
                     settings=db.execute('SELECT room,payload FROM sleep_schedule_settings WHERE room NOT IN (SELECT room FROM room_states WHERE archived=1) ORDER BY room').fetchall()
                     for row in settings:
+                        if db.execute("SELECT 1 FROM manual_memory_runs WHERE room=? AND state IN ('preparing','queued','running','indexing','unknown')",(row['room'],)).fetchone():continue
                         config=json.loads(row['payload'])
                         if not config['enabled'] or not text_connection.ready(app,row['room']):continue
                         effective=self.settings(row['room'])
@@ -157,7 +161,7 @@ class SleepSchedule:
                     "AND NOT EXISTS(SELECT 1 FROM sleep_night_jobs u WHERE u.room=n.room AND u.state='unknown' AND u.reviewed=0) "
                     "AND NOT EXISTS(SELECT 1 FROM autonomy_runs a WHERE a.room=n.room AND a.state='unknown' AND COALESCE(json_extract(a.payload,'$.reviewed'),0)=0) "
                     "AND NOT EXISTS(SELECT 1 FROM url_watch_checks w WHERE w.room=n.room AND w.state='unknown' AND COALESCE(json_extract(w.payload,'$.reviewed'),0)=0) AND "+ready_sql("n.room")+" ORDER BY n.rowid LIMIT 20").fetchall()
-                row=next((r for r in row if text_connection.ready(app,r['room'])),None)
+                row=next((r for r in row if text_connection.ready(app,r['room']) and not db.execute("SELECT 1 FROM manual_memory_runs WHERE room=? AND state IN ('preparing','queued','running','indexing','unknown')",(r['room'],)).fetchone()),None)
             self.pending=row is not None
             if row is None:return False
             item=dict(row)
