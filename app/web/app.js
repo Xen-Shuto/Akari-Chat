@@ -2494,7 +2494,7 @@ $("attachments-origin").addEventListener('click',async()=>{
   try{$("chat-log-query").value='';showWorkspace('logs');await chatLogLoad(0,doc.message_id);}catch(error){report(error);}
 });
 
-let avatarData=null,avatarBaseline='',avatarBusy=false,avatarOperation=null,avatarRequest=0,portraitRequest=0,avatarFailedVideo='',avatarUploadSelection=null;
+let avatarData=null,avatarBaseline='',avatarBusy=false,avatarOperation=null,avatarRequest=0,portraitRequest=0,avatarFailedVideo='';
 function avatarForm(){return {mode:$("avatar-mode").value,expression:$("avatar-mode").value==='manual'?$("avatar-expression").value:'idle',idle_seconds:Number($("avatar-idle-seconds").value),animated:$("avatar-animated").checked,internal_emotion:$("avatar-internal-emotion").checked};}
 function avatarDirty(){return !!avatarCrop||!!avatarData&&JSON.stringify(avatarForm())!==avatarBaseline;}
 const avatarSlots=['profile','idle','thinking','neutral','joy','anger','anxious','sadness'];
@@ -2515,7 +2515,7 @@ function avatarPreview(){
     else{const dummy=document.createElement('span');dummy.textContent='✦';dummy.className='avatar-card-placeholder';dummy.setAttribute('aria-label',name+'：画像なし');preview.append(dummy);}
     card.append(preview);const buttons=document.createElement('div');buttons.className='avatar-card-actions';
     for(const action of ['upload','delete']){const button=document.createElement('button');button.type='button';button.dataset.action=action;button.dataset.available=String(available);button.textContent=action==='upload'?'登録':'削除';button.setAttribute('aria-label',name+'を'+button.textContent);button.addEventListener('click',()=>{
-      if(action==='upload'){if(avatarDirty()){notice('表示設定を保存・破棄してから画像を登録してください。');return;}$('avatar-name').value=name;avatarUploadSelection={room:room.id,name};$('avatar-file').click();}
+      if(action==='upload')pickAvatar(name).catch(report);
       else avatarChange('delete',null,name).catch(report);
     });buttons.append(button);}card.append(buttons);$('avatar-grid').append(card);
   }
@@ -2547,7 +2547,7 @@ async function avatarLoad(force=false){
 async function avatarChange(action,image=null,target=null){
   if(!avatarData||avatarData.room!==room?.id||avatarBusy||busy||conversationEdit)return;
   if(action!=='settings'&&avatarDirty()){notice('表示設定を保存・破棄してから画像を管理してください。');return;}
-  const selected=room.id,values={room:selected,revision:avatarData.revision,action,expression:action==='settings'?avatarForm().expression:action==='upload'?$("avatar-name").value:target,mode:$("avatar-mode").value,idle_seconds:Number($("avatar-idle-seconds").value),animated:$("avatar-animated").checked,internal_emotion:$("avatar-internal-emotion").checked,image},signature=JSON.stringify(values);
+  const selected=room.id,values={room:selected,revision:avatarData.revision,action,expression:action==='settings'?avatarForm().expression:target,mode:$("avatar-mode").value,idle_seconds:Number($("avatar-idle-seconds").value),animated:$("avatar-animated").checked,internal_emotion:$("avatar-internal-emotion").checked,image},signature=JSON.stringify(values);
   if(avatarOperation?.signature!==signature)avatarOperation={signature,id:crypto.randomUUID()};avatarBusy=true;avatarControls();
   try{const result=await api('/api/avatar-change',{...values,request_id:avatarOperation.id});if(room?.id!==selected)return;avatarFill(result.document);await refreshPortrait();$("avatar-status").textContent=action==='delete'?'削除しました。キャラフォルダの原本と変更履歴は保持しています。':'保存しました。キャラフォルダの原本は変更していません。';}
   catch(error){report(error);}finally{avatarBusy=false;avatarControls();}
@@ -2567,14 +2567,34 @@ async function cropAvatar(data){
 function finishAvatarCrop(accept){if(!avatarCrop)return;const {resolve}=avatarCrop;let data=null;if(accept)data=$("avatar-crop-canvas").toDataURL('image/png');avatarCrop=null;$("avatar-crop-dialog").close();resolve(data);}
 for(const id of ['avatar-crop-zoom','avatar-crop-x','avatar-crop-y'])$(id).addEventListener('input',drawAvatarCrop);
 $("avatar-crop-accept").addEventListener('click',()=>finishAvatarCrop(true));$("avatar-crop-cancel").addEventListener('click',()=>finishAvatarCrop(false));$("avatar-crop-dialog").addEventListener('cancel',event=>{event.preventDefault();finishAvatarCrop(false);});
-$("avatar-file").addEventListener('change',async()=>{
-  const file=$("avatar-file").files[0],selection=avatarUploadSelection;avatarUploadSelection=null;if(!file)return;
-  const selected=selection?.room,target=selection?.name;
-  try{if(!selection||room?.id!==selected)throw new Error('ルームが変わったため画像を登録しませんでした。');if(file.size>5*1024*1024||!['image/png','image/jpeg','image/gif','video/mp4','video/webm'].includes(file.type))throw new Error('PNG/JPEG/GIF/MP4/WebM・5MiB以下のファイルを選んでください。');const moving=['image/gif','video/mp4','video/webm'].includes(file.type);if(moving&&$('avatar-crop-mode').value!=='none')throw new Error('GIF・動画は切り抜きせず元のファイルを使用してください。');
-    const data=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('画像を読み込めませんでした。'));reader.readAsDataURL(file);});
-    const prepared=moving?data:await cropAvatar(data);if(!prepared)return;if(room?.id!==selected||$("avatar-name").value!==target){notice('切り抜き中にルームや表情名が変わったため登録しませんでした。');return;}await avatarChange('upload',{name:file.name,data:prepared});
-  }catch(error){report(error);}finally{$("avatar-file").value='';}
-});
+async function pickAvatar(name){
+  if(avatarBusy||busy||!room||avatarData?.room!==room.id)return;
+  if(avatarDirty()){
+    notice('表示設定を保存・破棄してから画像を登録してください。');
+    return;
+  }
+  const selected=room.id,revision=avatarData.revision;
+  const sameSelection=()=>room?.id===selected&&avatarData?.revision===revision;
+  let image;
+  avatarBusy=true;
+  avatarControls();
+  try{
+    const {image:picked}=await api('/api/avatar-pick',{room:selected});
+    if(!picked)return;
+    if(!sameSelection())throw new Error('ルームや表情設定が変わったため登録しませんでした。');
+    const moving=['image/gif','video/mp4','video/webm'].includes(picked.mime);
+    if(moving&&$('avatar-crop-mode').value!=='none')throw new Error('GIF・動画は切り抜きせず元のファイルを使用してください。');
+    const data=moving?picked.data:await cropAvatar(picked.data);
+    if(!data)return;
+    if(!sameSelection())throw new Error('ルームや表情設定が変わったため登録しませんでした。');
+    image={name:picked.name,data};
+  }finally{
+    avatarBusy=false;
+    avatarControls();
+  }
+  await avatarChange('upload',image,name);
+}
+
 
 let diagnosticsData=null,diagnosticsLoading=false,diagnosticsRequest=0;
 const diagnosticsMarkers=new Map();

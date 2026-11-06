@@ -389,7 +389,7 @@ class Application:
             job = {"id": uuid.uuid4().hex, "kind": "episode", "generation": Generation(thinking_mode=self.store.settings().get('thinking_mode','auto')),
                    "room": room, "day": day, "source": source, "port": self.engine.port,
                    "started": time.perf_counter(), "payload": {"model": "Local_LLM", "stream": True,
-                       "temperature": 0.2, "max_tokens": min(1024, self.store.settings()["max_tokens"] or 1024),
+                       "temperature": 0.2,
                        "messages": [{"role": "system", "content": prompt},
                                     {"role": "user", "content": json.dumps(data, ensure_ascii=False)}]}}
             job["finished"] = threading.Event()
@@ -416,21 +416,22 @@ class Application:
             job = {"id":uuid.uuid4().hex,"kind":"resource","generation":generation,"executing":True}
             job["finished"] = threading.Event()
             self.job = job
+        from .context_budget import MEMORY_TIMEOUT
+        deadline=threading.Timer(MEMORY_TIMEOUT,generation.cancel);deadline.daemon=True;deadline.start()
         try:
             settings=self.store.settings()
-            if len(raw)>max(256,min(14000,settings["context"]//2)):
-                raise ValueError("生成資料が現在のコンテキストに対して長すぎます。対象を分割するかコンテキストを増やしてください。")
-            payload={"model":"Local_LLM","stream":True,"temperature":0.2,"max_tokens":min(settings["max_tokens"] or 4096,4096),
+            payload={"model":"Local_LLM","stream":True,"temperature":0.2,
                      "messages":[{"role":"system","content":prompt},{"role":"user","content":raw}]}
             chunks=[]
             for chunk in text_connection.stream(self,room,generation,payload,job_id=job['id']):
                 chunks.append(chunk)
-                if sum(map(len,chunks))>20000:
+                if sum(map(len,chunks))>1024*1024:
                     raise ValueError("草案が長すぎます。保存していません。")
             if generation.cancelled.is_set() or not chunks:
                 raise ValueError("生成を停止したか、草案が空でした。記憶は変更していません。")
             return self.resources.draft(room,kind,name,revision,source_hash,"".join(chunks))
         finally:
+            deadline.cancel()
             with self.lock:
                 if self.job is job:
                     self.job=None
@@ -587,6 +588,7 @@ class Application:
                                "temperature": settings["temperature"], "top_p": settings["top_p"], "max_tokens": settings["max_tokens"]}}
             job['display_model']=target.model if target else local_model_name(self.install,settings.get('model',''))
             job['user_request']=message
+            job['chat_history_remaining']=len(messages)-2
             job['retrieval_sources']=retrieved.get('results',[])
             job['conversation_api_revision']=target.revision if target else None
             job['vision']=vision;job['tool_image_slots']=remaining;job['tool_image_bytes']=budget
@@ -660,6 +662,10 @@ class Application:
                  'tool_definition_count':len(job['payload'].get('tools',[])),
                  'tool_definition_chars':len(json.dumps(job['payload'].get('tools',[]),ensure_ascii=False)),
                  'tool_result_chars':0,'first_after_tools_seconds':None,'result_budget':16000}
+        deadline=None
+        if job.get('kind')=='episode':
+            from .context_budget import MEMORY_TIMEOUT
+            deadline=threading.Timer(MEMORY_TIMEOUT,generation.cancel);deadline.daemon=True;deadline.start()
         try:
             if job.get("conversation_api_revision"):self.conversation_api.record(job["room"],job["id"]+":"+job["conversation_api_revision"],"generation","attempted")
             event({"type": "start", "id": job["id"], "context": job.get("context"), "model":job.get("display_model",job["payload"].get("model",""))})
@@ -677,6 +683,13 @@ class Application:
                     metrics.setdefault('context_stages',[]).append(measured)
                     application.diagnostics.trace('autonomy.context_stage',job['room'],job['id'],**measured)
                     if generation.cancelled.is_set():break
+                elif job.get('kind') in (None,'external_reply'):
+                    from .context_budget import fit_chat
+                    measured=fit_chat(self,job)
+                    metrics.setdefault('context_stages',[]).append(measured)
+                elif job.get('kind')=='episode' or job.get('memory') or job.get('routing'):
+                    from .context_budget import prepare_memory
+                    job['payload']=prepare_memory(self,job['room'],generation,job['payload'],job['id'])
                 round_chunks=[]
                 metrics.setdefault('tool_presentations',[]).append({
                     'count':len(job['payload'].get('tools',[])),
@@ -829,6 +842,7 @@ class Application:
             if failed:
                 error = str(exc)
         finally:
+            if deadline:deadline.cancel()
             if failed and received_results and job.get('kind') is None and not generation.cancelled.is_set():
                 from tools.result_delivery import immediate_report
                 chunks=[immediate_report(received_results)]
@@ -1415,9 +1429,26 @@ def handler_for(application):
                 if self.path=='/api/research-merge-undo':
                     item,changed=application.research_merges.undo(data.get('room',''),data.get('id',''),data.get('revision',''))
                     return self.reply(dict(operation=item,changed=changed))
-                if self.path=='/api/avatar-change':
-                    item,changed=application.avatars.change(data.get('room',''),data.get('revision',''),data.get('action',''),data.get('request_id',''),data.get('expression',''),data.get('mode','profile'),data.get('image'),idle_seconds=data.get('idle_seconds',0),internal_emotion=data.get('internal_emotion',False),animated=data.get('animated',False))
-                    return self.reply(dict(document=item,changed=changed))
+                if self.path == '/api/avatar-pick':
+                    if not application.import_picker_lock.acquire(blocking=False):
+                        raise ValueError('ファイル選択画面は既に開いています。')
+                    try:
+                        return self.reply(application.avatars.pick_upload(data.get('room', '')))
+                    finally:
+                        application.import_picker_lock.release()
+                if self.path == '/api/avatar-change':
+                    try:
+                        item, changed = application.avatars.change(
+                            data.get('room', ''), data.get('revision', ''), data.get('action', ''),
+                            data.get('request_id', ''), data.get('expression', ''),
+                            data.get('mode', 'profile'), data.get('image'),
+                            idle_seconds=data.get('idle_seconds', 0),
+                            internal_emotion=data.get('internal_emotion', False),
+                            animated=data.get('animated', False),
+                        )
+                    except sqlite3.Error:
+                        return self.reply({'error': '表情の保存中にデータベースのエラーが発生しました。表情設定を再読込してください。'}, 500)
+                    return self.reply(dict(document=item, changed=changed))
                 if self.path=='/api/attachment-change':
                     item,changed=application.attachments.change(data.get('room',''),data.get('id',''),data.get('revision',''),data.get('action',''),data.get('request_id',''))
                     return self.reply(dict(document=item,changed=changed))
@@ -1443,6 +1474,8 @@ def handler_for(application):
                     return self.reply(result)
                 if self.path=='/api/manual-memory':
                     return self.reply(application.sleep_schedule.manual.start(data.get('room',''),data.get('mode'),data.get('request_id'),data.get('revision')))
+                if self.path=='/api/manual-memory-finish':
+                    return self.reply(application.sleep_schedule.manual.finish_partial(data.get('room',''),data.get('id'),data.get('revision')))
                 if self.path=='/api/manual-memory-resume':
                     return self.reply(application.sleep_schedule.manual.resume(data.get('room',''),data.get('id'),data.get('revision')))
                 if self.path=='/api/manual-memory-cancel':

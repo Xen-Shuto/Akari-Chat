@@ -267,3 +267,9 @@ body:not([data-debug-mode="true"]) [data-generation-debug]{display:none!importan
 .x-post-table{overflow-x:auto;margin-top:12px}.x-post-table table{width:100%;border-collapse:collapse}.x-post-table th,.x-post-table td{border-bottom:1px solid var(--line);padding:8px;text-align:left;vertical-align:top}.x-post-table td:nth-child(4){min-width:12rem;overflow-wrap:anywhere}.x-post-table button[aria-pressed="true"]{outline:2px solid currentColor}#x-posts>section+section{margin-top:24px}
 
 #external-x-panel [role="tablist"] button[aria-selected="true"]{border-color:var(--accent)}
+
+/* Keep each period's compression and aggregation controls together. */
+.night-periods{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:20px;margin-block:16px;align-items:start}
+.night-period{min-width:0;display:flex;flex-direction:column;gap:14px}
+.night-period>label{margin:0;min-width:0}
+.night-period select,.night-period input:not([type="checkbox"]){width:100%;min-width:0}

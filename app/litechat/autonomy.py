@@ -98,13 +98,15 @@ class Autonomy:
             db.execute('INSERT OR REPLACE INTO autonomy_documents VALUES(?,?,?,?)',(key,room,kind,encoded(item)))
             db.execute('INSERT INTO autonomy_receipts VALUES(?,?,?,?)',(room,request_id,signature,encoded(item)))
         return item,True
-    def context(self,room):
+    def context(self,room,*,include_purpose_state=False):
         self.store.room_path(room)
         with self.store.connect() as db:
             rows=db.execute('SELECT payload FROM autonomy_documents WHERE room=? ORDER BY rowid DESC LIMIT 1000',(room,)).fetchall()
-        entries=[];counts={}
+        entries=[];counts={};purpose_state=None
         for row in rows:
             item=json.loads(row[0]);kind=item['kind']
+            if kind=='purpose' and purpose_state is None:
+                purpose_state=item['state']
             if item['state']!='active' or kind=='procedure' or counts.get(kind,0)>=2:continue
             counts[kind]=counts.get(kind,0)+1
             # Context is a small prompt summary, not a dump of linked records.
@@ -114,7 +116,9 @@ class Autonomy:
                 fields=('core_values','stable_interests','preferred_behaviors','avoid_behaviors','active_interests','open_questions')
                 entries[-1]['profile']={key:item.get('details',{}).get(key,[])[:3] for key in fields}
                 entries[-1]['profile_truncated']=any(len(item.get('details',{}).get(key,[]))>3 for key in fields)
-        return dict(entries=entries,notice='現在の活動目的・目標・研究・問い・振返り。本文は最大600字、各種類2件。詳細・手順は一覧と本文から参照してください。')
+        result = dict(entries=entries,notice='現在の活動目的・目標・研究・問い・振返り。本文は最大600字、各種類2件。詳細・手順は一覧と本文から参照してください。')
+        if include_purpose_state:result['purpose_state']=purpose_state
+        return result
 
     def references(self,room):
         self.store.room_path(room)

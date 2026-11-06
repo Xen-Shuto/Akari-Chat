@@ -6,7 +6,7 @@ import sqlite3
 import threading
 import uuid
 import hashlib
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from urllib.parse import urlencode
 from .memory_context import read_sources
@@ -143,15 +143,15 @@ class Store:
         finally:
             db.close()
 
-    def room_path(self, room, *, include_archived=False):
+    def room_path(self, room, *, include_archived=False, db=None):
         if not isinstance(room, str) or not room or room.startswith(".") or Path(room).name != room or "/" in room or "\\" in room:
             raise ValueError("キャラクター名が不正です。")
         path = self.characters / room
         if path.resolve().parent != self.characters or not path.is_dir():
             raise ValueError("キャラクターが見つかりません。")
         if not include_archived:
-            with self.connect() as db:
-                if any(row[0].casefold() == room.casefold() for row in db.execute("SELECT room FROM room_states WHERE archived=1")):
+            with (self.connect() if db is None else nullcontext(db)) as connection:
+                if any(row[0].casefold() == room.casefold() for row in connection.execute("SELECT room FROM room_states WHERE archived=1")):
                     raise ValueError("このルームは保管中です。ルーム管理から復元してください。")
         return path
 

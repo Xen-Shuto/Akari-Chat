@@ -73,7 +73,7 @@ def compact(value,limit):
 
 
 class StagedContext:
-    def __init__(self,prompt,context_limit,*,tools_enabled=True):
+    def __init__(self,prompt,context_limit,*,tools_enabled=True,task="一つの活動を行い、確認した結果を短く報告してください。"):
         tools=('必要な資料はツールで参照できます。'
             '未提示の機能はrequest_capabilityでカテゴリの候補一覧を読み、tool_namesで必要な名前を最大3件選ぶと定義が提示されます。') if tools_enabled else (
             '今回の接続先ではツールを使用できません。提示済みの資料だけで短い考察や案を述べ、参照・保存・送信などの操作を実行したと報告しないでください。')
@@ -82,6 +82,7 @@ class StagedContext:
             '本文のexcerptは抜粋です。続きが必要ならID/参照先とrevisionを手がかりに読み直せます。'
             '操作のstatus・変更内容・IDを引き継ぎ、pendingは確認待ち、unknownは結果未確認として扱います。'
             '同じ更新内容は再実行せず、その結果を使って次の段階へ進めてください。')
+        self.task=task
         self.context_limit=context_limit
         self.observations=[]
         self.progress=''
@@ -100,7 +101,7 @@ class StagedContext:
         # narration are reduced; never shorten identity or the requested activity.
         for excerpt in (1800,600,160,0):
             observations=[dict(row,result=compact(row['result'],excerpt) if row['operation']=='read' else row['result']) for row in self.observations]
-            state={'stage':round_number+1,'task':'活動目的に沿って一つの活動を行い、確認した結果と次の一手を短く報告してください。',
+            state={'stage':round_number+1,'task':self.task,
                    'observations':observations,'progress_excerpt':self.progress[:excerpt]}
             payload['messages']=[{'role':'system','content':self.prompt},{'role':'user','content':encoded(state)}]
             measured=measure_prompt(job['port'],payload,generation,self.context_limit)

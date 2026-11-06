@@ -6,6 +6,8 @@ from datetime import datetime
 
 from litechat import settings_io, text_connection
 from litechat.episodes import JST
+from litechat.context_budget import MemoryLengthError
+from .memory_segments import split_conversation, MIN_CHARACTERS
 from litechat.file_editor import EditConflict, safe_path, decode
 from .background_guard import uncertain
 from .sleep_diary import NoDiarySource
@@ -36,7 +38,7 @@ class ManualMemory:
 
     def listing(self,room):
         return [dict(run,payload={key:value for key,value in run['payload'].items()
-                                 if key in ('cursor','maximum','batch','step','saved','error','archive','kinds','date','prepared','operation')})
+                                 if key in ('cursor','offset','maximum','batch','step','saved','error','archive','kinds','date','prepared','operation','length_splits','generation_parts')})
                 for run in self.records(room)]
 
     def update(self, run, state, **fields):
@@ -152,6 +154,7 @@ class ManualMemory:
                     raise ValueError('記憶の確認待ち案を保存または破棄してから実行してください。')
                 maximum = db.execute("SELECT COALESCE(MAX(id),0) FROM messages WHERE room=? AND deleted=0 AND status='complete' AND role='assistant'", (room,)).fetchone()[0]
                 cursor = db.execute('SELECT last_id FROM sleep_diary_cursors WHERE room=?', (room,)).fetchone()
+                partial=db.execute('SELECT next_offset,bindings FROM sleep_diary_offsets WHERE room=? AND last_id=?',(room,cursor[0] if cursor else 0)).fetchone()
             plan = self.rebuild_plan(room) if mode == 'rebuild' else []
             key = uuid.uuid4().hex
             archive = self.store.root / 'manual_memory_backups' / key
@@ -169,6 +172,8 @@ class ManualMemory:
             (archive / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
             config = self.scheduler.settings(room)
             payload = dict(cursor=0 if mode == 'rebuild' else (cursor[0] if cursor else 0),
+                           offset=0 if mode=='rebuild' else (partial[0] if partial else 0),
+                           offset_bindings=[] if mode=='rebuild' else (json.loads(partial[1]) if partial else []),
                            maximum=maximum, batch=0, step=0, saved=0, error='',
                            archive=archive.relative_to(self.store.root).as_posix(),
                            kinds=list(KINDS), config_revision=config['revision'], date=datetime.now(JST).date().isoformat())
@@ -189,6 +194,7 @@ class ManualMemory:
                             UNION SELECT draft_id FROM sleep_diary_batches WHERE room=?
                             UNION SELECT draft_id FROM episode_compressions WHERE room=?)""", (room,room,room,room))
                         db.execute('INSERT OR REPLACE INTO sleep_diary_cursors VALUES(?,0)', (room,))
+                        db.execute('DELETE FROM sleep_diary_offsets WHERE room=?',(room,))
                 self.update(run, 'queued',prepared=True)
             except Exception:
                 self.update(run, 'unknown', error='準備の完了を確認できません。退避先と設定・記憶を確認してください。')
@@ -223,6 +229,19 @@ class ManualMemory:
             # Continuing is an explicit owner action: bind the next steps to the
             # current settings without losing an already-saved partial batch.
             self.update(run,'queued',error='',config_revision=self.scheduler.settings(room)['revision'])
+            return run
+
+    def finish_partial(self, room, key, revision):
+        """Explicitly leave a failed/cancelled run without claiming full completion."""
+        with self.app.lock, self.store.lock:
+            run=next((r for r in self.records(room) if r['id']==key),None)
+            if not run or run['revision']!=revision or run['state'] not in ('failed','cancelled'):
+                raise EditConflict('終了できる手動整理の状態が変更されています。')
+            if self.app.job or self.app.conversation_waiters or self.app.closing:
+                raise SleepBusy('会話・生成の完了を待ってください。')
+            if self.index_worker is not None and self.index_worker.is_alive():
+                raise SleepBusy('索引処理が停止するまで待ってください。')
+            self.update(run,'stopped',error='未完了のまま整理を終了しました。保存済みの記憶・会話・退避データを保持しています。未処理部分は完了扱いにしていません。')
             return run
 
     def acknowledge(self, room, key, revision):
@@ -304,7 +323,8 @@ class ManualMemory:
             self.update(run,'running')
             if kind == 'diary':
                 diary, source = self.scheduler.diary.source(room, p['date'], config,
-                    cursor=p['cursor'], maximum=p['maximum'], replay=run['mode']=='rebuild')
+                    cursor=p['cursor'], maximum=p['maximum'], replay=run['mode']=='rebuild',
+                    offset=p.get('offset'),offset_bindings=p.get('offset_bindings'),max_characters=p.get('diary_characters'))
                 night+='-'+p['operation']
                 p['batch_night']=night
                 self.update(run,'running')
@@ -317,6 +337,7 @@ class ManualMemory:
                 self.scheduler._finish(item['id'],'complete',draft_id=draft['id'])
             else:
                 conversation = self.scheduler.diary.episode_source(room, p['batch_night'],replay=run['mode']=='rebuild') if kind == 'episode' else p['source']
+                if p.get('review_parts'):conversation=p['review_parts'][0]
                 source = self.app.sleep_review.preview(room, kind, conversation=conversation)
                 draft = self.app.sleep_review.generate(*(source[k] for k in ('room','kind','name','revision','source_hash')),
                     'manual-'+p['operation'],
@@ -331,6 +352,28 @@ class ManualMemory:
                 self.guard(run)
                 self.app.resources.approve(room, draft['id'], review['text'])
                 self.advance(run, kind, source)
+        except MemoryLengthError as error:
+            # The server explicitly completed with length; no mutation was saved.
+            # Repartition known source material, never reuse the truncated answer.
+            try:
+                with self.app.lock:
+                    self.guard(run)
+                    if kind=='diary':
+                        size=sum(len(m['content']) for m in source['messages'])
+                        if size<=MIN_CHARACTERS:
+                            raise ValueError('最小の資料でも日記生成が長さの上限に達しました。モデル設定を確認するか、この整理を終了してください。')
+                        p['diary_characters']=max(MIN_CHARACTERS,size//2)
+                    else:
+                        parts=split_conversation(conversation)
+                        p['review_parts']=parts+p.get('review_parts',[])[1:]
+                        p['generation_parts']=len(p['review_parts'])
+                    p.pop('operation',None)
+                    self.update(run,'queued',length_splits=p.get('length_splits',0)+1,
+                                error='生成が長さの上限に達したため、未完了の文章を保存せず、資料を小さく分割して処理します。')
+            except (ValueError, OSError) as split_error:
+                with self.store.connect() as db:
+                    current=db.execute('SELECT state FROM manual_memory_runs WHERE id=?',(run['id'],)).fetchone()
+                if current and current[0]!='cancelled':self.update(run,'failed',error=str(split_error)[:500])
         except NoDiarySource:
             try:
                 with self.app.lock:
@@ -373,15 +416,27 @@ class ManualMemory:
         p['saved']+=1
         if kind=='diary':
             p['cursor']=source['last_id']
+            p['offset']=source.get('next_offset',0)
+            p['offset_bindings']=source.get('offset_bindings',[])
             p['source']={k:source[k] for k in ('messages','message_revisions')}
         p.pop('current_draft',None)
         p.pop('operation',None)
         p.pop('diary_source',None)
+        if kind!='diary' and p.get('review_parts'):
+            p['review_parts']=p['review_parts'][1:]
+            p['generation_parts']=len(p['review_parts'])
+            if p['review_parts']:
+                self.update(run,'queued',error='')
+                return
+            p.pop('review_parts',None)
+        if kind=='diary':p.pop('diary_characters',None)
         p['step']+=1
         if p['step']==len(KINDS):
             p.update(step=0,batch=p['batch']+1)
             with self.store.connect() as db:
                 db.execute('INSERT OR REPLACE INTO sleep_diary_cursors VALUES(?,?)',(run['room'],p['cursor']))
+                db.execute('INSERT OR REPLACE INTO sleep_diary_offsets VALUES(?,?,?,?)',
+                           (run['room'],p['cursor'],p.get('offset',0),json.dumps(p.get('offset_bindings',[]))))
         self.update(run,'queued')
 
     def guard(self, run):

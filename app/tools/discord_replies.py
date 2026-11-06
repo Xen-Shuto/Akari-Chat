@@ -130,6 +130,7 @@ class DiscordReplies:
     from tools.contracts import ToolContext
     from tools.capability_tools import ToolPresentation
     # Use the same room policy and bounded capability presentation as browser chat.
+    job['chat_history_remaining']=len(messages)-2
     definitions=self.app.local_tools.definitions(ToolContext(row['room'],job['id'],interactive=True)) if settings.get('tool_calling',True) else []
     job['user_request']=incoming['content']
     job['tool_presentation']=ToolPresentation(definitions)

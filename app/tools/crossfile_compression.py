@@ -50,7 +50,6 @@ class CrossfileCompression(EpisodeCompression):
    sources.append(dict(name=source,path=doc['path'],revision=doc['revision'],records=entries));records.extend(entries)
   if not 2<=len(records)<=40:raise ValueError('記録の合計は2～40件です。')
   material=json.dumps([dict(date=r['date'],summary=r['summary'],**({'period_end':r['period_end']} if mode=='monthly' else {})) for r in records],ensure_ascii=False)
-  if len(material)>max(256,min(12000,self.store.settings()['context']//2-600)):raise ValueError('本文がコンテキスト上限を超えています。')
   revision=fingerprint([room,name,week,mode,sources,self.model(room)])
   if affect['arousal_protection']:revision=fingerprint([revision,affect['revision'],effective_all])
   if self.app.memory_resonance.settings(room)['memory']:revision=fingerprint([revision,effective_all])

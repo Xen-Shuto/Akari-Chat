@@ -95,7 +95,7 @@ class MemoryRouting:
             db.execute("INSERT INTO memory_route_runs(room,request_id,signature,source_id,state) VALUES(?,?,?,?,'running')",(room,request_id,signature,key))
             db.commit()
             app.job=job
-        timer=threading.Timer(120,generation.cancel);timer.daemon=True;timer.start()
+        timer=threading.Timer(600,generation.cancel);timer.daemon=True;timer.start()
         try:
             payload=self.payload(source)
             chunks=[];size=0
@@ -130,9 +130,7 @@ class MemoryRouting:
             'JSONオブジェクトだけを返し、identity,diary,notepad,unclassifiedに文字列配列を指定します。各要素はsummary中に1回だけ現れる原文の連続抜粋です。'
             '要約・言い換え・追記・日付補完は禁止。引用範囲を重ねず、前後の文脈や話者を切り落とさないでください。各種類12件以下、合計24件以下、各要素1000文字以下。該当なしは空配列。')
         material=encoded(dict(summary=source['summary']))
-        if len(prompt)+len(material)>max(2000,settings['context']//2):raise ValueError('分類資料が現在のコンテキストに対して長すぎます。')
-        payload=dict(model='Local_LLM',stream=True,temperature=0,max_tokens=min(4096,settings['max_tokens'] or 4096),messages=[dict(role='system',content=prompt),dict(role='user',content=material)])
-        if max_tokens is not None:payload["max_tokens"]=min(payload["max_tokens"],max_tokens)
+        payload=dict(model='Local_LLM',stream=True,temperature=0,messages=[dict(role='system',content=prompt),dict(role='user',content=material)])
         return payload
 
     def proposals(self,db,source,data,remaining):

@@ -28,6 +28,7 @@ function sleepScheduleControls(){
   N('manual-memory-cancel').disabled=locked||!manualMemoryRuns.some(r=>['queued','running','indexing'].includes(r.state));
   N('manual-memory-ack').disabled=locked||manualMemoryRuns[0]?.state!=='unknown'||manualMemoryRuns[0]?.payload.prepared;
   N('manual-memory-resume').disabled=locked||!manualMemoryRuns[0]?.payload.prepared||!['failed','unknown','cancelled'].includes(manualMemoryRuns[0]?.state);
+  N('manual-memory-finish').disabled=locked||!['failed','cancelled'].includes(manualMemoryRuns[0]?.state);
   N('night-trace').disabled=locked;N('night-trace-open').disabled=locked||!N('night-trace').value;
 }
 async function loadSleepSchedule(force=false){
@@ -86,8 +87,8 @@ N('night-ack').addEventListener('click',async()=>{
 
 function renderManualMemory(runs){
   manualMemoryRuns=runs;
-  const labels={preparing:'準備中',queued:'待機中',running:'整理中',indexing:'索引作成中',complete:'完了',cancelled:'中止',failed:'失敗',unknown:'結果未確認',reviewed:'準備失敗を確認済み'};
-  const text=r=>r.payload.date+' '+(r.mode==='rebuild'?'全再整理':'差分整理')+' / '+(labels[r.state]||r.state)+' / 保存・確認済み '+r.payload.saved+'件 / 会話 '+r.payload.cursor+'～'+r.payload.maximum+(r.payload.error?' / '+r.payload.error:'')+(r.payload.archive?' / 退避先: app/data/'+r.payload.archive:'');
+  const labels={preparing:'準備中',queued:'待機中',running:'整理中',indexing:'索引作成中',complete:'完了',cancelled:'中止',failed:'失敗',unknown:'結果未確認',reviewed:'準備失敗を確認済み',stopped:'終了（未完了）'};
+  const text=r=>r.payload.date+' '+(r.mode==='rebuild'?'全再整理':'差分整理')+' / '+(labels[r.state]||r.state)+' / 保存・確認済み '+r.payload.saved+'件 / 会話 '+r.payload.cursor+'～'+r.payload.maximum+(r.payload.offset?' / 長文の処理位置 '+r.payload.offset+'文字':'')+(r.payload.length_splits?' / 長文再分割 '+r.payload.length_splits+'回':'')+(r.payload.generation_parts?' / 残り部分 '+r.payload.generation_parts+'件':'')+(r.payload.error?' / '+r.payload.error:'')+(r.payload.archive?' / 退避先: app/data/'+r.payload.archive:'');
   N('manual-memory-status').textContent=runs.length?text(runs[0]):'手動整理の実行履歴はありません。';
   N('manual-memory-history').textContent=runs.map(text).join('\n');
 }
@@ -121,10 +122,11 @@ N('manual-memory-incremental').onclick=()=>startManualMemory('incremental');
 N('manual-memory-rebuild').onclick=()=>startManualMemory('rebuild');
 N('manual-memory-refresh').onclick=refreshManualMemory;
 N('manual-memory-confirm').onchange=()=>controls();
-for(const action of ['cancel','resume','ack']){
+for(const action of ['cancel','resume','ack','finish']){
   N('manual-memory-'+action).onclick=async()=>{
     const run=manualMemoryRuns[0];
     if(!run||busy)return;
+    if(action==='finish'&&!confirm('未完了のままこの整理を終了します。保存済みの記憶と退避データは残ります。続行できなくなりますが終了しますか？'))return;
     busy=true;controls();
     try{await api('/api/manual-memory-'+action,{room:room.id,id:run.id,revision:run.revision});}
     catch(error){report(error);}

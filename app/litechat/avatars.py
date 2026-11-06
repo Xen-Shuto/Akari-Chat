@@ -53,6 +53,25 @@ class Avatars:
             db.execute('CREATE TABLE IF NOT EXISTS avatar_events(id INTEGER PRIMARY KEY,room TEXT,action TEXT,name TEXT,revision TEXT,created TEXT)')
             db.execute('CREATE TABLE IF NOT EXISTS avatar_receipts(room TEXT,request_id TEXT,signature TEXT,result TEXT,PRIMARY KEY(room,request_id))')
 
+    def pick_upload(self, room):
+        from tools.room_file_picker import pick_avatar_file
+
+        root = self.store.room_path(room)
+        avatar = safe_path(root, 'avatar')
+        path = pick_avatar_file(avatar if avatar.is_dir() else root, lambda: self.app.closing)
+        if path is None:
+            return {'image': None}
+        mime = EXTENSIONS.get(path.suffix.lower())
+        if mime is None or mime == 'image/webp':
+            raise ValueError('PNG/JPEG/GIF/MP4/WebMのファイルを選んでください。')
+        limit = 5 * 1024 * 1024
+        with path.open('rb') as stream:
+            raw = stream.read(limit + 1)
+        if not raw or len(raw) > limit:
+            raise ValueError('空でない5MiB以下のファイルを選んでください。')
+        encoded = base64.b64encode(raw).decode('ascii')
+        return {'image': {'name': path.name, 'mime': mime, 'data': f'data:{mime};base64,{encoded}'}}
+
     def source(self,root,relative):
         path=safe_path(root,relative)
         if not path.is_file():return None
@@ -66,7 +85,8 @@ class Avatars:
         return dict(relative=relative,mime=mime,revision=hashlib.sha256(encoded([relative,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns]).encode()).hexdigest())
 
     def catalog(self,room,db=None):
-        root=self.store.room_path(room);warning=[];config={}
+        # A large upload can hold an exclusive SQLite lock until this catalog is built.
+        root=self.store.room_path(room, db=db);warning=[];config={}
         try:
             path=safe_path(root,'expressions.json')
             if path.is_file():
