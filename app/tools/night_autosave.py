@@ -38,7 +38,7 @@ class NightAutosave:
   with app.lock:
    if app.closing or app.job or app.conversation_waiters:return False
    with self.store.connect() as db:
-    row=db.execute("SELECT a.*,n.night,n.state AS night_state FROM night_autosaves a JOIN sleep_night_jobs n ON n.id=a.job_id WHERE a.state='queued' AND NOT EXISTS(SELECT 1 FROM night_autosaves u WHERE u.room=a.room AND u.state='unknown') AND "+ready_sql("a.room")+" ORDER BY a.rowid LIMIT 1").fetchone()
+    row=db.execute("SELECT a.*,n.night,n.state AS night_state FROM night_autosaves a JOIN sleep_night_jobs n ON n.id=a.job_id WHERE a.state='queued' AND "+ready_sql("a.room")+" ORDER BY a.rowid LIMIT 1").fetchone()
    if row is None:self.pending=False;self.next_scan=time.monotonic()+30;return False
    item=dict(row);key=item['job_id']
    if item['night_state']!='complete':self.finish(key,'review','夜間実行の完了を確認できないため自動保存しません。');return True

@@ -103,16 +103,15 @@ class SleepReview:
             if conversation is None:
                 document, raw, source_hash = self.app.resources.source(room,kind,name)
                 parts = strict_json(raw)
+                complete = {m['id'] for m in self.store.history(room,12)
+                            if m['status']=='complete' and m['role'] in ('user','assistant')}
+                parts['conversation'] = [m for m in parts['conversation'] if m['id'] in complete]
             else:
                 document=self.app.resources.read(room,kind,name)
                 limit=max(32,min(400,self.store.settings()['context']//64))
                 parts=dict(target=document['text'][-limit:],target_is_excerpt=len(document['text'])>limit,
-                           **{k:self.app.resources.read(room,k)['text'][-limit:] for k in ('core','identity','diary')},conversation=[])
+                           **{k:self.app.resources.read(room,k)['text'][-limit:] for k in ('core','identity','diary')})
                 source_hash=''
-            complete = {m['id'] for m in self.store.history(room,12)
-                        if m['status']=='complete' and m['role'] in ('user','assistant')}
-            parts['conversation'] = [m for m in parts['conversation'] if m['id'] in complete]
-            if conversation is not None:
                 self.app.resources.check_messages(room,json.dumps(conversation['message_revisions']))
                 parts['conversation']=[{key:m[key] for key in ('id','role','content','created','source_fragment') if key in m} for m in conversation['messages']]
             parts['message_revisions'] = self.app.resources.message_revisions(room,[m['id'] for m in parts['conversation']])
@@ -216,7 +215,6 @@ class SleepReview:
         timer.start()
         try:
             prompt=self.prompt(kind,conversation)
-            settings = self.store.settings()
             payload = dict(model='Local_LLM', stream=True, temperature=0.2,
                            messages=[dict(role='system',content=prompt),dict(role='user',content=self._material(raw))])
             chunks, size = [], 0

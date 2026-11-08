@@ -12,6 +12,13 @@ from urllib.request import ProxyHandler, build_opener
 from .process_job import ProcessJob
 
 
+class GenerationLengthError(ValueError):
+    """The model reported a length limit on a fully received response."""
+
+    def __init__(self):
+        super().__init__('最大生成tokensまたはコンテキスト上限に達し、生成が途中で終了しました。')
+
+
 def validate_settings(values):
     values={"top_p":0.95,**values}
     token_value=values.get('max_tokens')
@@ -295,14 +302,16 @@ class Generation:
                     content = choices[0].get("delta", {}).get("content")
                     if isinstance(content, str) and content:
                         yield content
+            if not done and not self.cancelled.is_set():
+                raise ValueError("LLMとの接続が応答完了前に切れました。")
+            if self.finish_reason == 'length' and not self.cancelled.is_set():
+                raise GenerationLengthError()
             self.tool_calls = [calls[k] for k in sorted(calls)]
             ids=[c['id'] for c in self.tool_calls]
             if any(not isinstance(key,str) or not 0<len(key)<=256 for key in ids):
                 raise ValueError("ツール呼び出しIDが不正です。")
             if len(set(ids))!=len(ids):
                 raise ValueError("同じ応答内でツール呼び出しIDが重複しています。実行しませんでした。")
-            if not done and not self.cancelled.is_set():
-                raise ValueError("LLMとの接続が応答完了前に切れました。")
         finally:
             with self.lock:
                 self.socket = None

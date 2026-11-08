@@ -7,6 +7,7 @@ from litechat.autonomy import encoded
 from litechat.episodes import fingerprint
 from litechat.engine import Generation
 from litechat.file_editor import EditConflict
+from .background_guard import BackgroundQueueFull
 from litechat.resources import strict_json
 from .question_evidence import source as evidence_source
 
@@ -84,8 +85,9 @@ class QuestionPipeline:
                     policy=self.settings(room,db);source=self.batch(db,room,policy)
                     if source is None:continue
                     self.app.autonomous.enqueue(room,'question:'+policy['revision']+':'+str(source['boundary']),trigger='question',question_check=source,_db=db)
-                except (ValueError,EditConflict) as error:
-                    if str(error)=='背景処理の待機上限は全体20件です。':break
+                except BackgroundQueueFull:
+                    break
+                except (ValueError, EditConflict):
                     continue
                 db.execute('UPDATE question_pipeline_settings SET cursor=? WHERE room=? AND revision=?',(source['boundary'],room,policy['revision']));changed=True
         return changed

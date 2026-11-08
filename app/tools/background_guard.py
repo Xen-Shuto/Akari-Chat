@@ -11,3 +11,21 @@ def ready_sql(room, *, ignore_manual=False):
  return 'NOT EXISTS(SELECT 1 FROM room_states archived_room WHERE archived_room.room='+room+' AND archived_room.archived=1) AND '+' AND '.join('NOT EXISTS(SELECT 1 FROM '+table+' u WHERE u.room='+room+' AND '+condition+')' for table,condition in BLOCKERS if not (ignore_manual and table=='manual_memory_runs'))
 def uncertain(db,room, *, ignore_manual=False):
  return not bool(db.execute('WITH selected(room) AS (VALUES (?)) SELECT '+ready_sql('selected.room',ignore_manual=ignore_manual)+' FROM selected',(room,)).fetchone()[0])
+
+
+BACKGROUND_QUEUE_LIMIT = 20
+
+
+class BackgroundQueueFull(ValueError):
+    def __init__(self):
+        super().__init__(f'背景処理の待機上限は全体{BACKGROUND_QUEUE_LIMIT}件です。')
+
+
+def queue_full(db):
+    """Check the shared quota on the caller's enqueue connection."""
+    queued = db.execute(
+        "SELECT (SELECT COUNT(*) FROM autonomy_runs WHERE state='queued')"
+        "+(SELECT COUNT(*) FROM url_watch_checks WHERE state='queued')"
+        "+(SELECT COUNT(*) FROM sleep_night_jobs WHERE state='queued')"
+    ).fetchone()[0]
+    return queued >= BACKGROUND_QUEUE_LIMIT

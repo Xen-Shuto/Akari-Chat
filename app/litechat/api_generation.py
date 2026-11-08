@@ -1,6 +1,7 @@
 """Bounded native API adapters; no SDK, proxy inheritance, redirects or automatic retry."""
 import copy,http.client,json,re,socket,threading,time,uuid
 from urllib.parse import urlsplit,quote
+from .engine import GenerationLengthError
 
 def image_parts(content,provider):
  if isinstance(content,str):return [{'text':content}] if provider=='gemini' else [{'type':'text','text':content}]
@@ -167,16 +168,18 @@ def stream(generation,target,payload):
   if generation.cancelled.is_set():return
   if timed_out.is_set():raise ValueError('会話APIの時間上限です。自動再送はしません。')
   if not done:raise ValueError('会話APIとの接続が完了前に切れました。自動再送はしません。')
+  if generation.finish_reason in ('length','max_tokens','MAX_TOKENS'):
+   generation.finish_reason='length'
+   generation.api_outcome='complete'
+   raise GenerationLengthError()
   if target.provider=='anthropic':
    if set(blocks)!=closed_blocks:raise ValueError('Claudeの出力ブロックが未完了です。ツールは実行しません。')
    for block in blocks.values():
     if block['type']=='tool_use':
      args=block.pop('_json','');block['input']=json.loads(args) if args else block.get('input',{});calls[len(calls)]={'id':block['id'],'type':'function','function':{'name':block['name'],'arguments':json.dumps(block['input'],ensure_ascii=False)}}
   result=[calls[k] for k in sorted(calls)];validate_calls(result)
-  if result and generation.finish_reason in ('length','max_tokens','MAX_TOKENS'):raise ValueError('APIツール呼出が生成上限で中断しました。実行しません。')
   generation.api_outcome='complete'
-  generation.finish_reason={'STOP':'stop','MAX_TOKENS':'length','end_turn':'stop','stop_sequence':'stop','tool_use':'tool_calls','max_tokens':'length'}.get(generation.finish_reason,generation.finish_reason)
-  if generation.finish_reason=='length':raise ValueError('最大生成tokensに達しました。途中の本文を保持し、自動再送はしません。')
+  generation.finish_reason={'STOP':'stop','end_turn':'stop','stop_sequence':'stop','tool_use':'tool_calls'}.get(generation.finish_reason,generation.finish_reason)
   if generation.finish_reason not in (None,'stop','tool_calls'):raise ValueError('APIの応答終了理由を確認してください。途中本文は保持します。')
   generation.tool_calls=result
   generation.assistant_message=dict(role='assistant',content=''.join(chunks) or None,tool_calls=result)

@@ -46,10 +46,11 @@ class Motivation:
         return {'satisfaction':{},'recent_drives':[],'recent_at':None,'emotion_at':None,**state}
 
     def evaluate(self,room,db=None,clock=None):
-        self.store.room_path(room)
         if db is None:
             with self.store.connect() as connection:
-                connection.execute('BEGIN');return self.evaluate(room,connection,clock)
+                connection.execute('BEGIN')
+                return self.evaluate(room,connection,clock)
+        self.store.room_path(room,db=db)
         config=self._settings(db,room);state=self._state(db,room);clock=time.time() if clock is None else clock
         emotion=emotion_effect(state,clock)
         anchor=max(value for value in (state['last_interaction'],state['last_action'],state['anchor'],0) if value is not None)

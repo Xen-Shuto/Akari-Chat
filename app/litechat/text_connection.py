@@ -1,6 +1,10 @@
 """Room-scoped text generation for memory work; embeddings remain independent."""
 import time
 from .file_editor import EditConflict
+from .engine import GenerationLengthError
+
+
+_LENGTH_MESSAGE = '記憶生成が長さの上限に達しました。未完了の文章は保存していません。'
 
 
 def ready(app, room):
@@ -54,9 +58,14 @@ def stream(app, room, generation, payload, *, expected=None, job_id=''):
         check()
         reason=getattr(generation,'finish_reason',None)
         if not generation.cancelled.is_set() and reason in ('length','max_tokens','MAX_TOKENS'):
-            raise MemoryLengthError('記憶生成が長さの上限に達しました。未完了の文章は保存していません。')
+            raise MemoryLengthError(_LENGTH_MESSAGE)
         if not generation.cancelled.is_set() and (reason not in (None,'stop') or getattr(generation,'tool_calls',[])):
             raise ValueError('記憶生成が未完了です（終了理由: '+str(reason)+'）。原本は保持しました。')
+    except GenerationLengthError as error:
+        check()
+        if generation.cancelled.is_set():
+            raise
+        raise MemoryLengthError(_LENGTH_MESSAGE) from error
     finally:
         app.diagnostics.trace('memory.response',room,job_id,finish_reason=getattr(generation,'finish_reason',None),
                               cancelled=generation.cancelled.is_set(),tool_call_count=len(getattr(generation,'tool_calls',[])))

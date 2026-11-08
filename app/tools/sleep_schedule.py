@@ -10,7 +10,7 @@ from litechat import text_connection
 from litechat.working_slots import slot_name
 from litechat.file_editor import EditConflict
 from tools.sleep_review import SleepBusy
-from tools.background_guard import ready_sql
+from tools.background_guard import queue_full, ready_sql
 from tools.episode_compression import CompressionNoCandidates
 from .sleep_diary import SleepDiary, NoDiarySource, DiaryCancelled
 
@@ -153,14 +153,15 @@ class SleepSchedule:
                         key=night_key(moment,config['start'],config['end'])
                         if key is None:continue
                         for kind in sorted(config['kinds'],key=lambda kind:kind!='diary')+[t['mode']+'_compression' for t in config.get('compression_targets',[])]:
-                            if db.execute("SELECT (SELECT count(*) FROM sleep_night_jobs WHERE state='queued')+(SELECT count(*) FROM autonomy_runs WHERE state='queued')+(SELECT count(*) FROM url_watch_checks WHERE state='queued')").fetchone()[0]>=20:break
+                            if queue_full(db):
+                                break
                             db.execute('INSERT OR IGNORE INTO sleep_night_jobs(id,room,night,kind,config_revision,state,revision) VALUES(?,?,?,?,?,?,?)',
                                        (uuid.uuid4().hex,row['room'],key,kind,config['revision'],'queued',uuid.uuid4().hex))
             with self.store.connect() as db:
-                row=db.execute("SELECT * FROM sleep_night_jobs n WHERE state='queued' "
-                    "AND NOT EXISTS(SELECT 1 FROM sleep_night_jobs u WHERE u.room=n.room AND u.state='unknown' AND u.reviewed=0) "
-                    "AND NOT EXISTS(SELECT 1 FROM autonomy_runs a WHERE a.room=n.room AND a.state='unknown' AND COALESCE(json_extract(a.payload,'$.reviewed'),0)=0) "
-                    "AND NOT EXISTS(SELECT 1 FROM url_watch_checks w WHERE w.room=n.room AND w.state='unknown' AND COALESCE(json_extract(w.payload,'$.reviewed'),0)=0) AND "+ready_sql("n.room")+" ORDER BY n.rowid LIMIT 20").fetchall()
+                row = db.execute(
+                    "SELECT * FROM sleep_night_jobs n WHERE state='queued' AND "
+                    + ready_sql('n.room') + " ORDER BY n.rowid LIMIT 20"
+                ).fetchall()
                 row=next((r for r in row if text_connection.ready(app,r['room']) and not db.execute("SELECT 1 FROM manual_memory_runs WHERE room=? AND state IN ('preparing','queued','running','indexing','unknown')",(r['room'],)).fetchone()),None)
             self.pending=row is not None
             if row is None:return False

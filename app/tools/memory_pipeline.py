@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime
 from litechat.episodes import JST, fingerprint, summary_text
 from litechat.file_editor import EditConflict
+from .background_guard import BackgroundQueueFull
 from litechat.engine import Generation
 
 
@@ -138,9 +139,8 @@ class MemoryPipeline:
                 source['hash'] = fingerprint(source)
                 try:
                     app.autonomous.enqueue(room,'memory:'+revision+':'+str(parts[-1]['id']),trigger='memory',memory=source,_db=db)
-                except ValueError as error:
-                    if str(error)=='背景処理の待機上限は全体20件です。':break
-                    raise
+                except BackgroundQueueFull:
+                    break
                 db.execute('UPDATE memory_pipeline_settings SET cursor=? WHERE room=? AND revision=?', (parts[-1]['id'], room, revision))
                 changed = True
             return changed
@@ -164,7 +164,7 @@ class MemoryPipeline:
         data = [{k:m[k] for k in ('id','role','content','created')} for m in item['memory']['messages']]
         material = json.dumps(data, ensure_ascii=False)
         timeline = self.app.timelines.start_runtime(item['room'], item['id'])
-        return dict(id=item['id'],kind='autonomy',room=item['room'],memory=item['memory'],generation=Generation(thinking_mode=self.store.settings().get('thinking_mode','auto')),
+        return dict(id=item['id'],kind='autonomy',room=item['room'],memory=item['memory'],generation=Generation(thinking_mode=settings.get('thinking_mode','auto')),
             port=self.app.engine.port,started=time.perf_counter(),finished=threading.Event(),executing=True,
             tool_names=set(),vision=False,timeline_id=timeline['id'],payload=dict(model='Local_LLM',stream=True,
                 temperature=0.2,messages=[
@@ -201,8 +201,9 @@ class MemoryPipeline:
                 source=self.app.memory_routing.preview(room,link['source_id'])
                 routing=dict(parent_id=parent['id'],source_id=link['source_id'],revision=source['revision'],policy_revision=link['policy_revision'],routing_revision=link['routing_revision'])
                 child,_=self.app.autonomous.enqueue(room,'memory-route:'+parent['id'],trigger='memory_route',routing=routing,_db=db)
+            except BackgroundQueueFull:
+                break
             except ValueError as error:
-                if str(error)=='背景処理の待機上限は全体20件です。':break
                 link.update(state='cancelled',error=str(error));self.app.autonomous._write(db,parent);changed=True;continue
             link.update(state='queued',child_id=child['id']);self.app.autonomous._write(db,parent);changed=True
         return changed

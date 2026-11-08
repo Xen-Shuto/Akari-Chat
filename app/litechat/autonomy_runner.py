@@ -18,7 +18,7 @@ from . import text_connection
 from tools.capability_tools import ToolPresentation
 from .activity_focus import validate as validate_activity_focus
 from tools.contracts import ToolContext
-from tools.background_guard import ready_sql,uncertain as room_uncertain
+from tools.background_guard import BackgroundQueueFull, queue_full, ready_sql, uncertain as room_uncertain
 
 READ_TOOLS={'search_memory','read_memory_document','list_memory_documents','list_memory_entries','read_memory_entry',
             'read_world','read_lifestyle','read_search_context','read_notepad','read_schedules','read_autonomy','read_shared_procedure','read_timeline','read_purpose','read_question_progress','search_research','read_research_subscriptions','read_letters','find_entity_candidates'}
@@ -103,7 +103,8 @@ class AutonomyRunner:
                 item=json.loads(row[0])
                 if item['trigger']!=trigger or item.get('research')!=research or item.get('memory')!=memory or item.get('routing')!=routing or item.get('question_check')!=question_check or item.get('action_plan')!=action_plan:raise EditConflict('同じ操作IDの起動元が異なります。')
                 return item,False
-            if db.execute("SELECT (SELECT COUNT(*) FROM autonomy_runs WHERE state='queued')+(SELECT COUNT(*) FROM url_watch_checks WHERE state='queued')+(SELECT COUNT(*) FROM sleep_night_jobs WHERE state='queued')").fetchone()[0]>=20:raise ValueError('背景処理の待機上限は全体20件です。')
+            if queue_full(db):
+                raise BackgroundQueueFull()
             item=dict(id=uuid.uuid4().hex,room=room,trigger=trigger,state='queued',revision=uuid.uuid4().hex,
                       config_revision=config['revision'],created_at=now(),text='',error='',metrics={})
             if action_plan is not None:item['action_plan']=action_plan
@@ -157,7 +158,14 @@ class AutonomyRunner:
                     with self.store.connect() as db:
                         config['next_due']=time.time()+config['interval_seconds'];db.execute('UPDATE autonomy_settings SET payload=? WHERE room=?',(encoded(config),scheduled_room))
             with self.store.lock,self.store.connect() as db:
-                db.execute('BEGIN IMMEDIATE');rows=db.execute("SELECT pending.payload FROM autonomy_runs pending WHERE pending.state='queued' AND NOT EXISTS (SELECT 1 FROM autonomy_runs uncertain WHERE uncertain.room=pending.room AND uncertain.state='unknown' AND COALESCE(json_extract(uncertain.payload,'$.reviewed'),0)=0) AND NOT EXISTS (SELECT 1 FROM url_watch_checks uncertain_url WHERE uncertain_url.room=pending.room AND uncertain_url.state='unknown' AND COALESCE(json_extract(uncertain_url.payload,'$.reviewed'),0)=0) AND NOT EXISTS(SELECT 1 FROM sleep_night_jobs sleep_unknown WHERE sleep_unknown.room=pending.room AND sleep_unknown.state='unknown' AND sleep_unknown.reviewed=0) AND "+ready_sql("pending.room")+" AND (? IS NULL OR pending.room=?) AND (? IS NULL OR pending.id=?) ORDER BY pending.rowid LIMIT 20",(room,room,key,key)).fetchall()
+                db.execute('BEGIN IMMEDIATE')
+                rows = db.execute(
+                    "SELECT pending.payload FROM autonomy_runs pending WHERE pending.state='queued' AND "
+                    + ready_sql('pending.room')
+                    + " AND (? IS NULL OR pending.room=?) AND (? IS NULL OR pending.id=?)"
+                    " ORDER BY pending.rowid LIMIT 20",
+                    (room, room, key, key),
+                ).fetchall()
                 row=next((row for row in rows if self.connection_ready(json.loads(row[0])['room'],json.loads(row[0])['trigger']) and (json.loads(row[0])['trigger']!='scheduled' or not self.sleeping(json.loads(row[0])['room']))),None)
                 if row is None:return False
                 item=json.loads(row[0]);room=item['room'];config=self.settings(room)

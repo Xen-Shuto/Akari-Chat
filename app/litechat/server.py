@@ -419,14 +419,15 @@ class Application:
         from .context_budget import MEMORY_TIMEOUT
         deadline=threading.Timer(MEMORY_TIMEOUT,generation.cancel);deadline.daemon=True;deadline.start()
         try:
-            settings=self.store.settings()
             payload={"model":"Local_LLM","stream":True,"temperature":0.2,
                      "messages":[{"role":"system","content":prompt},{"role":"user","content":raw}]}
-            chunks=[]
+            chunks = []
+            size = 0
             for chunk in text_connection.stream(self,room,generation,payload,job_id=job['id']):
-                chunks.append(chunk)
-                if sum(map(len,chunks))>1024*1024:
+                size += len(chunk)
+                if size > 1024 * 1024:
                     raise ValueError("草案が長すぎます。保存していません。")
+                chunks.append(chunk)
             if generation.cancelled.is_set() or not chunks:
                 raise ValueError("生成を停止したか、草案が空でした。記憶は変更していません。")
             return self.resources.draft(room,kind,name,revision,source_hash,"".join(chunks))

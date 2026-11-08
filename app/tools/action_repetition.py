@@ -13,9 +13,10 @@ class ActionRepetition:
    db.execute('CREATE TABLE IF NOT EXISTS action_repetition_settings(room TEXT PRIMARY KEY,payload TEXT)')
    db.execute('CREATE TABLE IF NOT EXISTS action_repetition_receipts(room TEXT,request_id TEXT,signature TEXT,result TEXT,PRIMARY KEY(room,request_id))')
  def settings(self,room,db=None):
-  self.store.room_path(room)
   if db is None:
-   with self.store.connect() as db:return self.settings(room,db)
+   with self.store.connect() as connection:
+    return self.settings(room,connection)
+  self.store.room_path(room,db=db)
   row=db.execute('SELECT payload FROM action_repetition_settings WHERE room=?',(room,)).fetchone()
   return json.loads(row[0]) if row else dict(DEFAULTS,revision='unconfigured')
  def save(self,room,data,revision,request_id):

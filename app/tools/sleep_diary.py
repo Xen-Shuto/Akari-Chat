@@ -92,11 +92,13 @@ class SleepDiary:
             return True
         first_end=1 if continuing else next((i+1 for i,r in enumerate(rows) if r['role']=='assistant'),len(rows))
         selected=rows[:first_end] if offset else rows
-        while not offset and not fits(selected) and len(selected)>first_end:
+        selected_fits = not offset and fits(selected)
+        while not offset and not selected_fits and len(selected) > first_end:
             end=max(i for i,r in enumerate(selected[:-1]) if continuing or r['role']=='assistant')+1
             selected=selected[:end]
+            selected_fits = fits(selected)
         next_offset=0;fragment=continuing
-        if offset or not fits(selected):
+        if not selected_fits:
             original=rows[:first_end];total=sum(len(r['content']) for r in original)
             def slice_rows(end):
                 position=0;parts=[]
@@ -134,9 +136,10 @@ class SleepDiary:
             row=db.execute("SELECT payload FROM sleep_diary_batches WHERE room=? AND night=? AND state='complete'",(room,night)).fetchone()
             if row is None:raise NoDiarySource('この夜の日記資料が未確定のため、エピソードの重複作成を見送りました。')
             source=json.loads(row[0]);covered=set()
-            for prior in db.execute("SELECT source FROM episode_drafts WHERE room=? AND status IN ('pending','approved')",(room,)):
-                covered.update(message['id'] for message in json.loads(prior[0]).get('messages',[]))
-        messages=[message for message in source['messages'] if replay or source.get('fragment') or message['id'] not in covered]
+            if not replay and not source.get('fragment'):
+                for prior in db.execute("SELECT source FROM episode_drafts WHERE room=? AND status IN ('pending','approved')",(room,)):
+                    covered.update(message['id'] for message in json.loads(prior[0]).get('messages',[]))
+        messages=[message for message in source['messages'] if message['id'] not in covered]
         if {m['role'] for m in messages}!={'user','assistant'}:raise NoDiarySource('エピソード化する未整理の会話はありません。既存の案と記憶を保持しました。')
         ids={message['id'] for message in messages}
         bindings=[binding for binding in source['message_revisions'] if binding['id'] in ids]

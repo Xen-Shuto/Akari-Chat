@@ -13,6 +13,7 @@ from .research_subscriptions import JST
 from .file_editor import EditConflict
 from .public_http import parsed_url,RemoteError
 from .engine import Generation
+from tools.background_guard import BackgroundQueueFull, queue_full
 
 INTERVALS={'manual':0,'hourly_1':3600,'hourly_3':10800,'hourly_6':21600,'hourly_12':43200,'daily':86400}
 FIELDS={'title','url','group_id','interval','at','enabled','max_per_day'}
@@ -171,8 +172,8 @@ class URLWatches:
             if watch['archived'] or origin!='user' and not watch['enabled']:raise ValueError('監視が停止されています。')
             if not app.autonomous.settings(room)['allow_web']:raise ValueError('自律実行設定でWeb利用を許可してください。')
             if db.execute("SELECT 1 FROM url_watch_checks WHERE room=? AND watch_id=? AND state IN ('queued','running','unknown') AND COALESCE(json_extract(payload,'$.reviewed'),0)=0",(room,key)).fetchone():raise ValueError('同じURLは待機/実行中、または結果未確認です。')
-            queued=db.execute("SELECT (SELECT COUNT(*) FROM url_watch_checks WHERE state='queued')+(SELECT COUNT(*) FROM autonomy_runs WHERE state='queued')+(SELECT COUNT(*) FROM sleep_night_jobs WHERE state='queued')").fetchone()[0]
-            if queued>=20:raise ValueError('背景処理の待機上限は全体20件です。')
+            if queue_full(db):
+                raise BackgroundQueueFull()
             item=dict(id=uuid.uuid4().hex,room=room,watch_id=key,watch_revision=revision,url=watch['url'],title=watch['title'],origin=origin,state='queued',revision=uuid.uuid4().hex,created_at=now(),error='',diff='')
             checkpoint()
             db.execute('INSERT INTO url_watch_checks VALUES(?,?,?,?,?)',(item['id'],room,key,'queued',encoded(item)))

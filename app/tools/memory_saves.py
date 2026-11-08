@@ -79,7 +79,7 @@ class MemorySaves:
   if not self.pending and time.monotonic()<self.next_scan:return False
   with self.app.lock,self.store.lock:
    if self.app.closing or self.app.job or self.app.conversation_waiters:return False
-   with self.store.connect() as db:rows=db.execute("SELECT * FROM memory_save_jobs j WHERE state='queued' AND NOT EXISTS(SELECT 1 FROM memory_save_jobs u WHERE u.room=j.room AND u.state='unknown') AND "+ready_sql("j.room")+" ORDER BY (kind='episode'),rowid LIMIT 100").fetchall()
+   with self.store.connect() as db:rows=db.execute("SELECT * FROM memory_save_jobs j WHERE state='queued' AND "+ready_sql("j.room")+" ORDER BY (kind='episode'),rowid LIMIT 100").fetchall()
    for row in rows:
     item=dict(row);room=item['room'];payload=json.loads(item['payload']);policy=self.settings(room)
     if policy['revision']!=payload['policy_revision'] or not policy['episodes' if item['kind']=='episode' else 'classified']:
