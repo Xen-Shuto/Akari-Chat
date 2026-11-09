@@ -43,7 +43,7 @@ WORKFLOWS = {
     'change_lifestyle': '物品や服装を反映する時に使う。まずread_lifestyleで対象一覧/外見を読む。操作に応じたscope/locationとrevisionを引き継ぎ、valuesには変更する項目だけを入れる。実際の反映結果はchangesで確認する。',
     'read_schedules': '既存の通知予約を確認する時に使う。取り消す場合は返されたid/revisionをchange_schedule(cancel)へ渡す。',
     'change_schedule': '経過時間の通知はtimerとseconds、指定日時はalarmとat、集中/休憩はpomodoroと各秒数/cycles。cancelはread_schedulesで得たid/revisionを指定。AIの行動予約はmanage_action_reservationを使う。',
-    'search_web': '公開情報を調べる時にqueryを指定する。見出しと抜粋の検索なので、内容を詳しく確認する時は返ったURLをread_urlへ渡す。',
+    'search_web': '公開情報を調べる時にqueryを指定する。結果の抜粋やGoogle検索の回答は資料として扱い、確認した出典を示す。抜粋を全文確認として扱わず、詳しく確認する場合は別途、参照する公開URLを指定する。',
     'read_url': '公開ページの本文を読む時に使う。初回はurl、分割取得の続きは返されたdocument_id/offsetを使う。取得不能なページは取得できなかったと伝える。',
     'generate_image': '画像を作りたい時にpromptとaspectを指定する。参照する場合はread_images(view=references)で得たIDをreference_idsへ渡す。生成と保存を待って返された結果・保存先を元に応答する。対応会話モデルには完成画像も渡される。',
     'cancel_image_job': '生成を止めたい時に使う。read_images(view=jobs)から生成ジョブのid/revisionを取得する。画像ファイルのIDとジョブIDは別。返る状態で取消受付/完了を区別する。',

@@ -8,6 +8,10 @@ from urllib.parse import urlsplit,urljoin,urlunsplit,quote
 
 class RemoteError(ValueError):pass
 class RemoteTimeout(RemoteError):pass
+class RemoteHTTPError(RemoteError):
+    def __init__(self,status):
+        super().__init__('接続先がHTTP '+str(status)+'を返しました。')
+        self.status=status
 
 def parsed_url(url):
     if not isinstance(url,str) or len(url)>2048 or any(ord(c)<33 or ord(c)==127 for c in url):raise RemoteError('URLの形式を確認してください。')
@@ -45,7 +49,7 @@ def request(url,method='GET',body=None,headers=None,timeout=12,limit=1048576,che
             if response.status in (301,302,303,307,308):
                 if method!='GET' or not response.getheader('Location'):raise RemoteError('この要求のリダイレクトは実行しません。')
                 url=urljoin(url,response.getheader('Location'));continue
-            if not 200<=response.status<300:raise RemoteError('接続先がHTTP '+str(response.status)+'を返しました。')
+            if not 200<=response.status<300:raise RemoteHTTPError(response.status)
             if response.getheader('Content-Encoding','identity').lower() not in ('identity',''):raise RemoteError('圧縮応答には対応していません。')
             raw=bytearray()
             while True:

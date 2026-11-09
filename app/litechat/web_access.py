@@ -1,4 +1,4 @@
-"""DuckDuckGo HTML search and immutable room-scoped URL snapshots."""
+"""Shared web search and immutable room-scoped URL snapshots."""
 import hashlib
 import json
 import re
@@ -7,13 +7,11 @@ import uuid
 from datetime import datetime,timezone
 from html.parser import HTMLParser
 from urllib.parse import urljoin,urlsplit,parse_qs
+from tools.external_secrets import unprotect
 from .public_http import request,parsed_url,RemoteError
 from .file_editor import EditConflict
 from .ddg_transport import search_response
-
-class SearchError(RemoteError):
-    def __init__(self,message,reason,http_status):
-        super().__init__(message);self.reason=reason;self.http_status=http_status
+from .web_search import PROVIDERS, SearchError, SearchSettings, api_search
 
 class Text(HTMLParser):
     def __init__(self):super().__init__(convert_charrefs=True);self.skip=0;self.parts=[];self.title=[];self.in_title=False
@@ -52,10 +50,30 @@ def decoded(raw,content_type):
 class WebAccess:
     def __init__(self,store,fetch=request,clock=time.time):
         self.store,self.fetch,self.clock=store,fetch,clock
+        self.settings=SearchSettings(store,clock)
+        self.gemini_key=lambda:''
         with store.connect() as db:db.execute('CREATE TABLE IF NOT EXISTS web_documents(id TEXT PRIMARY KEY,room TEXT,url TEXT,title TEXT,body TEXT,fetched REAL,revision TEXT)')
     def search(self,query,limit,checkpoint):
+        return self._search(self.settings.get(),query,limit,checkpoint)
+    def _search(self,config,query,limit,checkpoint,manual=False):
+        provider=config['provider']
+        if provider=='duckduckgo':
+            if not manual and self.settings.ddg_pause() is not None:
+                raise SearchError('DuckDuckGoは追加確認のため一時停止中です。ブラウザまたは設定の検索テストで確認できます。','backend_unavailable')
+            return self._ddg(query,limit,checkpoint)
+        try:
+            key=self.gemini_key() if provider=='google_grounding' else unprotect(config['tavily_key'])
+        except ValueError as error:
+            raise SearchError('保存した検索用APIキーを読み込めません。キーを登録し直してください。','not_configured') from error
+        data=api_search(provider,query,limit,key,self.fetch,checkpoint,self.settings.reserve,google_model=config['google_model'])
+        label,backend=PROVIDERS[provider]
+        return dict(provider=label,backend=backend,query=query,limit=limit,source_url='',
+                    fetched_at=datetime.fromtimestamp(self.clock(),timezone.utc).isoformat(),**data)
+    def _ddg(self,query,limit,checkpoint):
         status,html,final=search_response(query,checkpoint)
-        if status==202 or any(word in html.lower() for word in ('anomaly.js','anomaly-modal','bots use duckduckgo','challenge-form')):raise SearchError('DuckDuckGoが追加確認を要求しています。自動再試行はしません。','challenge',status)
+        if status==202 or any(word in html.lower() for word in ('anomaly.js','anomaly-modal','bots use duckduckgo','challenge-form')):
+            self.settings.update_ddg_pause(True)
+            raise SearchError('DuckDuckGoが追加確認を要求しています。自動再試行はしません。','challenge',status)
         if status!=200:raise SearchError('DuckDuckGoがHTTP '+str(status)+'を返しました。自動再試行はしません。','http_error',status)
         parser=Results();parser.feed(html);rows=[]
         for row in parser.rows:
@@ -68,17 +86,20 @@ class WebAccess:
             rows.append({'title':re.sub(r'\s+',' ',row['title']).strip()[:200],'url':target,'snippet':re.sub(r'\s+',' ',row['snippet']).strip()[:500]})
             if len(rows)>=limit:break
         if not rows and not any(marker in html.lower() for marker in ('class="no-results','class="result--no-result',"class='no-results","class='result--no-result")):raise SearchError('DuckDuckGoの検索結果を解析できませんでした。','parse_error',status)
+        self.settings.update_ddg_pause(False)
         return {'provider':'DuckDuckGo','backend':'duckduckgo-html-only','query':query,'results':rows,'fetched_at':datetime.fromtimestamp(self.clock(),timezone.utc).isoformat(),'limit':limit,'source_url':final}
     def test_search(self,query,checkpoint=lambda:None):
         if not isinstance(query,str) or not query.strip() or len(query)>200:raise ValueError('検索語は1〜200文字で指定してください。')
         started=time.monotonic()
+        config=self.settings.get()
+        label,backend=PROVIDERS[config['provider']]
         try:
-            data=self.search(query.strip(),5,checkpoint)
+            data=self._search(config,query.strip(),5,checkpoint,manual=True)
             return dict(ok=True,reason='results' if data['results'] else 'empty',http_status=200,
                         duration_ms=round((time.monotonic()-started)*1000),**data)
         except RemoteError as error:
             return dict(ok=False,reason=getattr(error,'reason','transport_error'),http_status=getattr(error,'http_status',None),
-                        message=str(error),duration_ms=round((time.monotonic()-started)*1000),provider='DuckDuckGo',backend='duckduckgo-html-only',query=query.strip(),results=[])
+                        message=str(error),duration_ms=round((time.monotonic()-started)*1000),provider=label,backend=backend,query=query.strip(),results=[])
     def read(self,room,url='',document_id='',offset=0,limit=4000,checkpoint=lambda:None):
         self.store.room_path(room);checkpoint()
         if document_id:

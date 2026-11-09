@@ -160,6 +160,7 @@ class Application:
         from tools.external_gateway import ExternalGateway
         self.gateway=ExternalGateway(self)
         self.web = WebAccess(self.store)
+        self.web.gemini_key = self._web_gemini_key
         self.watches = URLWatches(self.store,self.web)
         from tools.url_watch_extensions import WatchExtensions
         self.watch_extensions=WatchExtensions(self)
@@ -227,6 +228,12 @@ class Application:
         self.schedules.start(self)
         self.images.start(self)
         self.autonomous.start()
+
+    def _web_gemini_key(self):
+        from tools.external_secrets import unprotect
+        active=self.conversation_api.raw('')['values']
+        config=self.conversation_api.profiles('',active).get('gemini',{})
+        return unprotect(config.get('key',''))
 
     def corpus(self, room, include_dormant=False):
         root = self.store.room_path(room)
@@ -779,6 +786,7 @@ class Application:
                     event({'type':'tool_start','name':call['function']['name'],'call_id':call['id']})
                     result=application.local_tools.run(job["room"],job["id"],call,before=job.get('before'),
                                                        interactive=job.get('kind')!='autonomy' and job.get('tool_presentation') is not None,
+                                                       autonomous=job.get('kind')=='autonomy',
                                                        cancelled=generation.cancelled,allowed=job.get('tool_names',set()),
                                                        capability_scope=job.get('capability_scope'),deduplicate_effects=staged is not None,
                                                        result_budget=max(0,metrics['result_budget']-metrics['tool_result_chars']-512*(len(calls)-call_index-1)))
@@ -983,6 +991,8 @@ def handler_for(application):
                     return
                 if path.path=="/api/url-watch-options":
                     return self.reply(application.watch_extensions.settings(args.get("room",[""])[0]))
+                if path.path=='/api/web-search-settings':
+                    return self.reply(application.web.settings.status())
                 if path.path=="/api/music-settings":
                     return self.reply(application.music_settings.view())
                 if path.path=='/api/update':
@@ -1484,6 +1494,11 @@ def handler_for(application):
                 if self.path=='/api/manual-memory-ack':
                     return self.reply(application.sleep_schedule.manual.acknowledge(data.get('room',''),data.get('id'),data.get('revision')))
                 if self.path=='/api/night-autosave-ack':return self.reply(application.sleep_schedule.autosave.acknowledge(data.get('room',''),data.get('id',''),data.get('revision','')))
+                if self.path=='/api/web-search-settings':
+                    if application.closing:raise ValueError('終了処理中です。')
+                    return self.reply(application.web.settings.save(data.get('provider'),data.get('revision'),
+                                                                    data.get('tavily_key',''),data.get('clear_key',False),
+                                                                    google_model=data.get('google_model')))
                 if self.path=='/api/web-search-test':
                     if application.closing:raise ValueError('終了処理中です。')
                     if not application.web_test_lock.acquire(blocking=False):return self.reply({'error':'検索テストを実行中です。'},409)

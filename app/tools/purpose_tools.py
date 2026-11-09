@@ -1,6 +1,7 @@
 """Read a purpose profile or propose changes. Human approval is never a tool."""
 import hashlib
 import json
+from litechat.autonomy import inactive_purpose,purpose_status_only
 from litechat.file_editor import EditConflict
 from .contracts import ToolSpec,ToolOutput,ToolFailure
 from .schema import schema
@@ -12,7 +13,14 @@ PROFILE={'type':'object','properties':{key:{'type':'array','maxItems':5,'items':
 
 def read_purpose(app,context,args):
     context.checkpoint()
-    if args['view']=='profile':data=app.purposes.profile(context.room)
+    if context.autonomous or args['view']=='profile':
+        profile=app.purposes.profile(context.room)
+        if context.autonomous and inactive_purpose(profile['document']):
+            if args['view']!='profile':
+                raise ToolFailure('inactive_purpose','停止中の活動目的の提案履歴は自律行動に使いません。')
+            return ToolOutput(data=dict(profile,document=purpose_status_only(profile['document'])),
+                              message='停止中の活動目的です。利用者が再開するまで、現在の活動の指示として使いません。')
+    if args['view']=='profile':data=profile
     elif args['view']=='proposals':data=app.purposes.listing(context.room,args['offset'],args['limit'],args['revision'])
     else:
         item=app.purposes.document(context.room,args['id'])

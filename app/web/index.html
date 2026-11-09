@@ -212,7 +212,25 @@
 <div class="editor-row"><button type="button" id="app-update-check">更新を確認</button><button type="button" id="app-update-apply" disabled>更新して再起動</button></div>
 </section>
 <section id="music-settings-panel" data-subview hidden><h3>音楽検索</h3><p class="muted small">音楽を推薦するときの検索リンク先を選びます。YouTubeは常に有効です。Spotifyは通常の再生に登録が必要です。SoundCloudもアプリや一部機能では登録が必要です。</p><form id="music-settings-form"><label class="check"><input type="checkbox" id="music-youtube" checked disabled>YouTube（常にON）</label><label class="check"><input type="checkbox" id="music-bandcamp">Bandcamp</label><label class="check"><input type="checkbox" id="music-soundcloud">SoundCloud</label><label class="check"><input type="checkbox" id="music-spotify">Spotify（要登録）</label><div class="button-row"><button type="submit" id="music-settings-save">設定を保存</button><button type="button" id="music-settings-reload">未保存の変更を破棄して再読込</button></div><p id="music-settings-status" class="muted small" role="status"></p></form></section><section id="external-connections-common" data-subview hidden><h3>外部連携（共通）</h3><p class="muted small">認証情報はWindowsの現在のユーザー向けに暗号化して保存します。空欄で保存すると既存の認証情報を維持します。連携は共通の接続を利用可能にし、各ルームで利用を許可した場合だけ使えます。Googleの認証は共通の1件です。XとDiscordのアカウント登録・認証は、ルーム設定の外部連携で行います。</p><div id="external-common-forms"></div><div id="external-gateway"></div></section><details id="external-settings" data-subview hidden><summary>Web・画像生成</summary>
-    <h3>Web検索</h3><p class="muted small">検索先はDuckDuckGo専用です。他の検索元への自動切替は行いません。追加確認が必要な場合、自動取得は失敗として返します。</p><label>検索語<input id="web-browser-query" maxlength="200" placeholder="空欄のテストでは Python programming language を検索"></label><div class="button-row"><button id="web-search-test" type="button">検索テスト</button><a id="web-browser-open" class="button" target="_blank" rel="noopener noreferrer" href="https://duckduckgo.com/">DuckDuckGoを開く</a></div><p id="web-search-test-status" class="muted small" role="status" aria-live="polite"></p><div id="web-search-test-results"></div>
+    <h3>Web検索</h3>
+    <p class="muted small">設定した検索先を会話と自律行動で使います。検索語は外部に送信されます。検索先の自動切替は行いません。</p>
+    <form id="web-search-form" autocomplete="off">
+      <label>検索先<select id="web-search-provider"><option value="duckduckgo">DuckDuckGo</option><option value="google_grounding">Google検索（Gemini）</option><option value="tavily">Tavily</option></select></label>
+      <div id="web-google-settings" hidden>
+        <label>Google検索モデル<select id="web-google-model"><option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite（利用実績による制限あり）</option><option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite（課金設定が必要）</option></select></label>
+        <p class="muted small">共通の会話モデル設定に保存されたGeminiのAPIキーを使います。3.5 Flash-Liteで検索するには、Google側のプロジェクトで課金の有効化が必要です。<a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank" rel="noopener noreferrer">料金</a>と<a href="https://ai.google.dev/gemini-api/terms?authuser=00" target="_blank" rel="noopener noreferrer">利用条件</a>を確認してください。</p>
+      </div>
+      <div id="web-tavily-settings" hidden>
+        <label>Tavily APIキー<input id="web-tavily-key" type="password" maxlength="512" autocomplete="new-password"></label>
+        <label class="check"><input id="web-tavily-clear" type="checkbox">保存したAPIキーを消去</label>
+        <p class="muted small">APIキーが必要です。月1,000回まで無料（基本検索）。従量課金はTavily側で設定します。</p>
+      </div>
+      <div class="button-row"><button id="web-search-save" type="submit" disabled>検索設定を保存</button><button id="web-search-reload" type="button">設定を再読込</button></div>
+      <p id="web-search-usage" class="muted small" role="status"></p>
+    </form>
+    <label>検索語<input id="web-browser-query" maxlength="200" placeholder="空欄のテストでは Python programming language を検索"></label>
+    <div class="button-row"><button id="web-search-test" type="button">検索テスト</button><a id="web-browser-open" class="button" target="_blank" rel="noopener noreferrer" href="https://duckduckgo.com/">DuckDuckGoを開く</a></div>
+    <p id="web-search-test-status" class="muted small" role="status" aria-live="polite"></p><div id="web-search-test-results"></div>
     <h3>画像生成の接続先</h3><form id="image-settings-form">
       <label>方式<select id="image-provider"><option value="disabled">無効</option><option value="local">ローカル（SD WebUI / Forge）</option><option value="gemini">Gemini</option><option value="openai">OpenAI互換（OpenRouter含む）</option><option value="pollinations">Pollinations</option><option value="huggingface">Hugging Face</option></select></label>
       <div id="image-provider-fields" hidden><label>API URL / ベースURL<input id="image-base-url" maxlength="2048"></label>

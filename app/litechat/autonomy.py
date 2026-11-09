@@ -19,6 +19,12 @@ def text(value,limit,required=False):
     if not isinstance(value,str) or len(value)>limit or required and not value.strip():raise ValueError('本文またはタイトルの長さを確認してください。')
     return value.strip()
 
+def inactive_purpose(item):
+    return bool(item and item.get('kind')=='purpose' and item.get('state') in ('paused','completed','archived'))
+
+def purpose_status_only(item):
+    if not inactive_purpose(item):return item
+    return {key:item[key] for key in ('id','kind','state','revision') if key in item}
 
 class Autonomy:
     def __init__(self,store,slots=None):
@@ -128,8 +134,9 @@ class Autonomy:
         return dict(documents=[{k:item[k] for k in ('id','kind','title','state','revision')} for item in docs],
                     slots=[item['name'] for item in slots if item['exists']])
 
-    def related(self,room,key):
+    def related(self,room,key,*,hide_inactive_purpose=False):
         item=self.document(room,key)
+        if hide_inactive_purpose and inactive_purpose(item):return None
         refs=self.references(room)
         outgoing=set(item.get('details',{}).get('links',[]))
         with self.store.connect() as db:
@@ -142,4 +149,8 @@ class Autonomy:
         with self.store.connect() as db:
             rows=db.execute("SELECT id,json_extract(payload,'$.title'),json_extract(payload,'$.state'),json_extract(payload,'$.revision'),json_extract(payload,'$.input_references.activity.revision') FROM activity_timelines WHERE room=? AND json_extract(payload,'$.related_id')=? ORDER BY rowid DESC LIMIT 11",(room,key)).fetchall()
         timelines=[dict(id=row[0],title=row[1],state=row[2],revision=row[3],source_changed=bool(row[4] and row[4]!=item['revision'])) for row in rows]
-        return dict(outgoing=[doc for doc in refs['documents'] if doc['id'] in outgoing],incoming=incoming[:50],incoming_more=len(incoming)>50,working_slots=slots,timelines=timelines[:10],timelines_more=len(timelines)>10)
+        outgoing=[doc for doc in refs['documents'] if doc['id'] in outgoing]
+        if hide_inactive_purpose:
+            outgoing=[purpose_status_only(doc) for doc in outgoing]
+            incoming=[purpose_status_only(doc) for doc in incoming]
+        return dict(outgoing=outgoing,incoming=incoming[:50],incoming_more=len(incoming)>50,working_slots=slots,timelines=timelines[:10],timelines_more=len(timelines)>10)

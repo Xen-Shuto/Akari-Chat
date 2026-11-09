@@ -22,6 +22,7 @@ class ToolContext:
     deadline: float | None = None
     interactive: bool = False
     capability_scope: frozenset | None = None
+    autonomous: bool = False
 
     def checkpoint(self):
         if self.cancelled is not None and self.cancelled.is_set():

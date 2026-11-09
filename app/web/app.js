@@ -482,6 +482,7 @@ async function loadState(preferred) {
   await loadLocalModelFields(state.settings,state.models);
   if(initial)await window.AkariConversation?.loadCommon();
   if(!imageSettingsDoc)await loadImageSettings();
+  if(!webSearchSettings)await loadWebSearchSettings().catch(report);
   const firstSamples=state.character_bootstrap&&localStorage.getItem('characterBootstrap')!==state.character_bootstrap;
   const id = preferred || (firstSamples?'Assistant':localStorage.getItem("lastRoom"));
   $("rooms").value = state.rooms.some(r=>r.id===id)?id:state.rooms.find(r=>r.id==='Assistant')?.id || state.rooms[0]?.id || "";
@@ -2223,22 +2224,83 @@ $("image-settings-form").addEventListener('submit',async event=>{
     imageProfileEdits={};renderImageProfile();imageProviderStatus();$("image-settings-status").textContent='画像生成設定を保存しました。';
   }catch(error){report(error);}finally{imageSettingsBusy=false;$("image-save-settings").disabled=false;}
 });
-$("web-browser-query").addEventListener('input',()=>{$("web-browser-open").href='https://duckduckgo.com/?q='+encodeURIComponent($("web-browser-query").value);});
+function updateWebBrowserLink(){
+  const provider=$("web-search-provider").value,link=$("web-browser-open"),query=$("web-browser-query").value.trim();
+  const [url,label]={
+    duckduckgo:['https://duckduckgo.com/','DuckDuckGoを開く'],
+    google_grounding:['https://www.google.com/search','Google検索を開く'],
+    tavily:['https://app.tavily.com/playground','Tavily Playgroundを開く']
+  }[provider];
+  const target=new URL(provider==='google_grounding'&&!query?'https://www.google.com/':url);
+  if(query&&provider!=='tavily')target.searchParams.set('q',query);
+  link.href=target.href;
+  link.textContent=label;
+}
+$("web-browser-query").addEventListener('input',updateWebBrowserLink);
+let webSearchSettings=null;
+function renderWebSearchUsage(){
+  const provider=$("web-search-provider").value,settings=webSearchSettings;
+  updateWebBrowserLink();
+  $("web-google-settings").hidden=provider!=='google_grounding';
+  $("web-tavily-settings").hidden=provider!=='tavily';
+  const usage=settings?.usage[provider];
+  const period=provider==='google_grounding'?'太平洋時間':'UTC';
+  const pause=provider==='duckduckgo'&&settings?.ddg_pause_until;
+  $("web-search-usage").textContent=usage?`${usage.period}（${period}） ${usage.count} / ${usage.limit} 回`:
+    pause?`追加確認のため ${new Date(pause*1000).toLocaleString()} まで自動検索を停止中`:'';
+}
+function applyWebSearchSettings(doc){
+  webSearchSettings=doc;
+  $("web-search-provider").value=doc.provider;
+  $("web-google-model").value=doc.google_model;
+  $("web-tavily-key").value='';
+  $("web-tavily-key").placeholder=doc.tavily_key_saved?'登録済み · 空欄で保持':'未登録';
+  $("web-tavily-clear").checked=false;
+  $("web-search-save").disabled=false;
+  renderWebSearchUsage();
+}
+async function loadWebSearchSettings(){applyWebSearchSettings(await api('/api/web-search-settings'));}
+$("web-search-provider").addEventListener('change',renderWebSearchUsage);
+$("web-search-reload").addEventListener('click',()=>loadWebSearchSettings().catch(report));
+$("web-search-form").addEventListener('submit',async event=>{
+  event.preventDefault();
+  const button=$("web-search-save"),provider=$("web-search-provider").value;
+  if(!webSearchSettings||button.disabled)return;
+  button.disabled=true;
+  try{
+    const credentials=provider==='tavily'?{tavily_key:$("web-tavily-key").value.trim(),clear_key:$("web-tavily-clear").checked}:{};
+    const model=provider==='google_grounding'?{google_model:$("web-google-model").value}:{};
+    const doc=await api('/api/web-search-settings',{provider,revision:webSearchSettings.revision,...credentials,...model});
+    applyWebSearchSettings(doc);notice('検索設定を保存しました。');
+  }catch(error){report(error);}finally{button.disabled=false;}
+});
 $("web-search-test").addEventListener('click',async()=>{
   const button=$("web-search-test"),status=$("web-search-test-status"),results=$("web-search-test-results");
-  if(button.disabled)return;button.disabled=true;results.replaceChildren();status.textContent='DuckDuckGoで検索テストを実行中…';
+  if(button.disabled)return;
+  const provider=$("web-search-provider").value;
+  const keyEdited=provider==='tavily'&&($("web-tavily-key").value||$("web-tavily-clear").checked);
+  const modelEdited=provider==='google_grounding'&&$("web-google-model").value!==webSearchSettings?.google_model;
+  if(webSearchSettings&&(webSearchSettings.provider!==provider||keyEdited||modelEdited)){status.textContent='検索設定を保存してからテストしてください。';return;}
+  button.disabled=true;results.replaceChildren();status.textContent='保存済みの検索先でテスト中…';
   try{
     const data=await api('/api/web-search-test',{query:$("web-browser-query").value.trim()||'Python programming language'});
     const timing=`（${data.http_status==null?'HTTP応答なし':'HTTP '+data.http_status}・${(data.duration_ms/1000).toFixed(2)}秒）`;
-    status.textContent=data.ok?(data.results.length?`検索成功：${data.results.length}件 ${timing}`:`検索完了：該当結果は0件 ${timing}`):`${data.reason==='challenge'?'アクセス確認が必要です。検索は完了していません。':data.message} ${timing}`;
+    const outcome=data.ok?(data.results.length?`検索成功：${data.results.length}件`:'検索完了：該当結果は0件'):(data.reason==='challenge'?'アクセス確認が必要です。検索は完了していません。':data.message);
+    status.textContent=`${data.provider} · ${outcome} ${timing}`;
+    if(data.answer){const summary=document.createElement('p');summary.textContent=data.answer;results.append(summary);}
     for(const row of data.results){
       const item=document.createElement('p'),link=document.createElement('a'),snippet=document.createElement('span');
       const url=new URL(row.url);if(!['http:','https:'].includes(url.protocol))continue;
       link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';link.textContent=row.title||row.url;
-      snippet.textContent=' — '+row.snippet;item.append(link,snippet);results.append(item);
+      snippet.textContent=row.snippet?' — '+row.snippet:'';item.append(link,snippet);results.append(item);
     }
   }catch(error){status.textContent='検索テストを完了できませんでした：'+error.message;}
-  finally{button.disabled=false;}
+  finally{
+    button.disabled=false;
+    api('/api/web-search-settings').then(doc=>{
+      if(webSearchSettings?.revision===doc.revision){webSearchSettings=doc;renderWebSearchUsage();}
+    }).catch(()=>{});
+  }
 });
 $("open-image-settings").addEventListener('click',()=>{showWorkspace('settings');revealPanel('external-settings');});
 let appearancePresetDoc=null,appearancePresetOperation=null,appearancePresetSelected="";

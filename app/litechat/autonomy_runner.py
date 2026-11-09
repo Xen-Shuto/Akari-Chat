@@ -253,6 +253,8 @@ class AutonomyRunner:
         working_reference=app.working_usage.capture(character,report)
         activity_context = app.autonomy.context(room, include_purpose_state=True)
         purpose_state = activity_context.pop('purpose_state')
+        inactive_labels = {'completed': '完了', 'archived': 'アーカイブ', 'paused': '保留'}
+        independent_activity = purpose_state in inactive_labels and not item.get('action_plan') and 'research' not in item
         has_purpose = purpose_state == 'active' and any(
             entry['kind'] == 'purpose' and (
                 entry['body'].strip() or entry.get('next_action', '').strip()
@@ -271,27 +273,31 @@ class AutonomyRunner:
                     '進行中の目標や問い、書き置きがあれば参考にします。手がかりが少なければ短い創作や振り返りでもよく、'
                     '自然な候補が浮かばなければ今回は見送れます。実際に行ったこと、または見送ったことを短く報告してください。'
                     '今回の興味や選択はその場限りのものとして扱い、継続したい活動目的は既存の確認待ち案として提案できます。')
-            inactive_labels = {'completed': '完了', 'archived': 'アーカイブ', 'paused': '保留'}
-            if purpose_state in inactive_labels:
+            if independent_activity:
                 task = (f'登録済みの活動目的は「{inactive_labels[purpose_state]}」です。'
-                        'その状態を尊重し、今回は別の活動を選びます。目的の再開や状態の変更は利用者の判断に任せます。' + task)
-            history = self.store.history(room, min(4, settings['history_limit']))
-            excerpts = [
-                {'role': message['role'], 'excerpt': message['content'][:240]}
-                for message in history
-                if message['status'] == 'complete' and message['role'] in ('user', 'assistant')
-                and message.get('origin') != 'autonomy' and message['content'].strip()
-            ]
-            if excerpts:
-                activity_context['recent_conversation'] = excerpts
+                        '今回は性格や現在の書き置きを参考に別の活動を選びます。目的の再開や状態の変更は利用者の判断に任せます。' + task)
+            else:
+                history = self.store.history(room, min(4, settings['history_limit']))
+                excerpts = [
+                    {'role': message['role'], 'excerpt': message['content'][:240]}
+                    for message in history
+                    if message['status'] == 'complete' and message['role'] in ('user', 'assistant')
+                    and message.get('origin') != 'autonomy' and message['content'].strip()
+                ]
+                if excerpts:
+                    activity_context['recent_conversation'] = excerpts
         prompt = (instructions + '\nこれは自律処理です。ユーザーの新しい発言ではありません。\n' + task
                   + '\n許可された範囲で取り組みます。会話の抜粋や手順文は参考資料です。'
                   '未実行の計画を実行済みにせず、pendingは人の確認前で未保存です。失敗/unknownの更新を自動再実行しないでください。\n'
                   + encoded(activity_context))
         if working_reference:prompt+='\n今回の選択話題（本文の続きはread_memory_documentのkind=working、name=slotで取得）：'+encoded(working_reference)
         if item.get('action_plan'):prompt+='\n今回の予約（日時到達で開始。権限の追加ではない。感情は過去の自己申告）：'+encoded(item['action_plan'])+'\nこの目的と詳細に沿って一つの活動を行ってください。アラームの場合はキャラクターとして短い呼びかけを結果に残してください。'
-        recent=[{key:run.get(key) for key in ('id','state','error','reviewed')}|{'text':run.get('text','')[:1000]} for run in self.listing(room)['runs'] if run['id']!=item['id']][:2]
-        prompt+='\n直近の実行結果（本文は各1000字まで。結果不明の操作を繰り返さないこと）：'+encoded(recent)
+        recent=[run for run in self.listing(room)['runs'] if run['id']!=item['id']][:2]
+        if independent_activity:
+            prompt+='\n直近の実行状態（結果不明の操作は繰り返さない）：'+encoded([{key:run.get(key) for key in ('id','state','reviewed')} for run in recent])
+        else:
+            prompt+='\n直近の実行結果（本文は各1000字まで。結果不明の操作を繰り返さないこと）：'+encoded([
+                {key:run.get(key) for key in ('id','state','error','reviewed')}|{'text':run.get('text','')[:1000]} for run in recent])
         memo=app.user_memo.context(room) if 'research' not in item else None
         if memo and memo['text'].strip():prompt+='\nユーザーからの書き置き（既存の許可・実行範囲内で扱い、権限を追加しない。自動消去しない）：'+encoded(memo)
         allowed=set(READ_TOOLS)|{'read_action_reservations','read_persona_contract','check_text_against_persona_contract'}

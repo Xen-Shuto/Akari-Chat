@@ -97,7 +97,7 @@ class LocalTools:
                        (context.room,context.job_id,context.call_id,fingerprint))
         return None
 
-    def run(self,room,job,call,*,before=None,cancelled=None,allowed=None,result_budget=None,interactive=False,capability_scope=None,deduplicate_effects=False):
+    def run(self,room,job,call,*,before=None,cancelled=None,allowed=None,result_budget=None,interactive=False,capability_scope=None,deduplicate_effects=False,autonomous=False):
         # These identifiers come from the application, never from tool arguments.
         self.app.store.room_path(room)
         if not isinstance(job,str) or not job:raise ValueError('ジョブIDが必要です。')
@@ -108,7 +108,7 @@ class LocalTools:
         name=fn.get('name','');name=name if isinstance(name,str) else ''
         call_id=call.get('id','') if isinstance(call,dict) else ''
         valid_id=isinstance(call_id,str) and 0<len(call_id)<=256
-        context=ToolContext(room,job,call_id if valid_id and call_id else uuid.uuid4().hex,before,cancelled,interactive=interactive,capability_scope=capability_scope)
+        context=ToolContext(room,job,call_id if valid_id and call_id else uuid.uuid4().hex,before,cancelled,interactive=interactive,capability_scope=capability_scope,autonomous=autonomous)
         spec=self.registry.get(name);input_chars=0;claimed=False;policy_lease=False;approval_used=False
         stage='validation';delivery_result=None
         self._trace('tool.received',context,name=name,arguments_raw=fn.get('arguments','{}'))
